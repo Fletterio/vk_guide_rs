@@ -1,5 +1,5 @@
 [package]
-name = "vkGuide-rs"
+name = "vk_guide_rs"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.79"
 ash = "0.37.3"
+cfg-if = "1.0.0"
 cgmath = "0.18.0"
 gltf = "1.4.0"
 imgui = "0.11.0"
