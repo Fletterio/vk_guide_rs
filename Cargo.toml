@@ -1,0 +1,21 @@
+[package]
+name = "vkGuide-rs"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.79"
+ash = "0.37.3"
+cgmath = "0.18.0"
+gltf = "1.4.0"
+imgui = "0.11.0"
+imgui-rs-vulkan-renderer = "1.10.0"
+log = "0.4.20"
+pretty_env_logger = "0.5.0"
+sdl2 = "0.36.0"
+stb_image = "0.3.0"
+thiserror = "1.0.56"
+tobj = "4.0.1"
+vma = "0.3.1"
