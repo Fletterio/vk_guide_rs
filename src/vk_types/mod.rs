@@ -9,6 +9,7 @@ macro_rules! vk_check {
     };
 }
 
+
 //Macro works, testing that something aborts is a pain in the ass
 #[cfg(test)]
 mod tests {
