@@ -70,6 +70,7 @@ impl VulkanEngine {
             if (self.stop_rendering){
                 std::thread::sleep(std::time::Duration::from_millis(10));
                 continue;
+
             }
             self.draw();
         }
