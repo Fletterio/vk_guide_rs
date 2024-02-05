@@ -2,7 +2,8 @@ use std::borrow::Cow;
 use std::ffi::CStr;
 use ash::vk;
 
-unsafe extern "system" fn vulkan_debug_callback(
+#[cfg(debug_assertions)]
+pub unsafe extern "system" fn vulkan_debug_callback(
     message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
     message_type: vk::DebugUtilsMessageTypeFlagsEXT,
     p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,

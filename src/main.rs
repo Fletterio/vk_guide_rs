@@ -9,5 +9,5 @@ fn main() {
     pretty_env_logger::init();
     let mut engine = VulkanEngine::init();
     engine.run();
-    engine.cleanup();
+    //no cleanup, it's in the engine's drop
 }

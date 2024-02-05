@@ -1,12 +1,17 @@
+mod device;
+
 use std::ffi::CString;
 use std::os::raw::c_char;
-use ash::{Entry, Instance, vk};
+use ash::{Device, Entry, Instance, vk};
 use sdl2::video::Window;
 use anyhow::Result;
 #[cfg(debug_assertions)]
 use ash::extensions::ext::DebugUtils;
+use ash::vk::DebugUtilsMessengerEXT;
+use crate::vk_debug::vulkan_debug_callback;
 
-fn create_instance(entry : &Entry, window : &Window) -> Result<Instance> {
+//-----------------------------INSTANCE-------------------------------
+pub fn create_instance(entry : &Entry, window : &Window) -> Result<Instance> {
     let app_info = vk::ApplicationInfo::builder()
         .application_name(CString::new("Vulkan Application")?.as_c_str())
         .application_version(vk::make_api_version(0,0,1,0))
@@ -31,4 +36,27 @@ fn create_instance(entry : &Entry, window : &Window) -> Result<Instance> {
         .enabled_extension_names(&layer_names);
 
     unsafe {Ok(entry.create_instance(&instance_create_info, None)?)}
+}
+//---------------------------------------DEBUG-----------------------------------------
+#[cfg(debug_assertions)]
+pub fn create_debug_messenger(debug_utils_loader : &DebugUtils) -> Result<DebugUtilsMessengerEXT>{
+    let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
+        .message_severity(
+            vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
+                | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+                | vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
+        )
+        .message_type(
+            vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+        )
+        .pfn_user_callback(Some(vulkan_debug_callback));
+
+    unsafe {Ok(debug_utils_loader.create_debug_utils_messenger(&debug_info, None)?)}
+}
+
+//----------------------------DEVICE------------------------------------
+pub fn create_device(instance : &Instance, surface : vk::SurfaceKHR) -> Result<(Device, vk::PhysicalDevice)> {
+
 }

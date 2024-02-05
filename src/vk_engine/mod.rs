@@ -6,7 +6,10 @@ use sdl2::event::{Event, WindowEvent};
 use anyhow::Result;
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::Surface;
+use ash::vk::Handle;
 use sdl2::{EventPump};
+use sdl2::sys::VkInstance;
+use crate::vk_bootstrap;
 
 const WINDOW_TITLE: &'static str = "Vulkan Engine";
 const WINDOW_WIDTH: u32 = 1700;
@@ -21,9 +24,14 @@ pub struct VulkanEngine {
     pub window_extent : vk::Extent2D,
     pub window : sdl2::video::Window,
     pub instance : Instance,
-    pub chosen_gpu : vk::PhysicalDevice,
+    #[cfg(debug_assertions)]
+    pub debug_utils_loader : DebugUtils,
+    #[cfg(debug_assertions)]
+    pub debug_messenger: vk::DebugUtilsMessengerEXT,
+    pub surface_loader : Surface,
+    pub surface : vk::SurfaceKHR,
     pub device : Device,
-    pub surface : Surface,
+    pub chosen_gpu : vk::PhysicalDevice,
     pub event_pump : EventPump,
 }
 
@@ -31,7 +39,7 @@ pub struct VulkanEngine {
 impl VulkanEngine {
     pub fn init() -> Result<Self> {
         unsafe {
-            let extent = vk::Extent2D {width : 1700, height : 900};
+            let window_extent = vk::Extent2D {width : 1700, height : 900};
             //SDL initialization
             //todo: not killed
             let sdl_context = sdl2::init()?;
@@ -43,18 +51,33 @@ impl VulkanEngine {
 
             //Vulkan initialization
             let entry = Entry::linked();
-            let instance: Instance;
+            let instance = vk_bootstrap::create_instance(&entry, &window)?;
+            //Debug Utils initialization
+            #[cfg(debug_assertions)]
+            let debug_utils_loader = DebugUtils::new(&entry, &instance);
+            #[cfg(debug_assertions)]
+            let debug_messenger = vk_bootstrap::create_debug_messenger(&debug_utils_loader)?;
+            //Surface initialization
+            let surface_loader = Surface::new(&entry, &instance);
+            let instance_handle = instance.handle().as_raw();
+            let surface = vk::SurfaceKHR::from_raw(window.vulkan_create_surface(instance_handle as VkInstance)?);
             Ok(VulkanEngine {
                 is_initialized : true,
                 entry,
                 frame_number : 0,
                 stop_rendering : false,
-                window_extent : extent,
+                window_extent,
                 window,
-                instance : ,
-                chosen_gpu : ,
-                device : ,
-                surface : ,
+                instance,
+                #[cfg(debug_assertions)]
+                debug_utils_loader,
+                #[cfg(debug_assertions)]
+                debug_messenger,
+                surface_loader,
+                surface,
+                device,
+                chosen_gpu,
+                event_pump :
             })
         }
     }
@@ -89,9 +112,10 @@ impl VulkanEngine {
     pub fn draw(&mut self) {
         todo!()
     }
-    pub fn cleanup(&mut self) {
-        if (self.is_initialized){
+}
 
-        }
+impl Drop for VulkanEngine{
+    fn drop(&mut self) {
+        todo!()
     }
 }
