@@ -7,6 +7,7 @@ use sdl2::video::Window;
 use anyhow::Result;
 #[cfg(debug_assertions)]
 use ash::extensions::ext::DebugUtils;
+use ash::extensions::khr::Surface;
 use ash::vk::DebugUtilsMessengerEXT;
 use crate::vk_debug::vulkan_debug_callback;
 
@@ -57,6 +58,13 @@ pub fn create_debug_messenger(debug_utils_loader : &DebugUtils) -> Result<DebugU
 }
 
 //----------------------------DEVICE------------------------------------
-pub fn create_device(instance : &Instance, surface : vk::SurfaceKHR) -> Result<(Device, vk::PhysicalDevice)> {
+pub fn create_device(instance : &Instance, surface_loader : &Surface, surface : vk::SurfaceKHR) -> Result<(Device, vk::PhysicalDevice)> {
+    let (physical_device, queue_index) = device::pick_physical_device_and_queue(instance, surface_loader, surface)?;
+    let priorities = [1.0];
+    let queue_info = vk::DeviceQueueCreateInfo::builder()
+        .queue_family_index(queue_index)
+        .queue_priorities(&priorities);
 
+    let features = vk::PhysicalDeviceFeatures::default();
+    let foo = vk::DeviceCreateInfo::default();
 }

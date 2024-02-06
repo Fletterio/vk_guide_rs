@@ -1,28 +1,37 @@
 use ash::{Instance, vk};
 use anyhow::{anyhow, Result};
+use ash::extensions::khr::Surface;
 use ash::vk::BaseOutStructure;
 
-pub fn pick_physical_device(instance : &Instance, surface : vk::SurfaceKHR) -> Result<vk::PhysicalDevice> {
+pub fn pick_physical_device_and_queue(instance : &Instance, surface_loader : &Surface, surface : vk::SurfaceKHR) -> Result<(vk::PhysicalDevice, u32)> {
     let physical_devices = unsafe {
         instance.enumerate_physical_devices()?
     };
     log::debug!("{} devices (GPU) found with vulkan support.", physical_devices.len());
     let mut result = None;
     for &physical_device in physical_devices.iter() {
-        if is_physical_device_suitable(instance, surface, physical_device) {
-            if result.is_none() {
-                result = Some(physical_device);
-            }
+        match is_physical_device_suitable(instance, surface_loader, surface, physical_device)? {
+            Some(index) => {if result.is_none() {
+                result = Some((physical_device, index));
+                break;
+            }},
+            None => {}
         }
     }
     match result {
         None => Err(anyhow!("Failed to find a suitable GPU!")),
-        Some(physical_device) => Ok(physical_device)
+        Some(device_queue_pair) => Ok(device_queue_pair)
     }
 }
 
-fn is_physical_device_suitable(instance : &Instance, surface : vk::SurfaceKHR, physical_device : vk::PhysicalDevice) -> bool {
-    features_supported(instance, physical_device) && surface_supported(instance, surface, physical_device)
+fn is_physical_device_suitable(instance : &Instance, surface_loader : &Surface, surface : vk::SurfaceKHR, physical_device : vk::PhysicalDevice) -> Result<Option<u32>> {
+    let index = surface_supported(instance, surface_loader, surface, physical_device)?;
+    if features_supported(instance, physical_device) {
+        Ok(Some(index))
+    }
+    else {
+        Ok(None)
+    }
 }
 
 fn features_supported(instance : &Instance, physical_device : vk::PhysicalDevice) -> bool {
@@ -49,6 +58,10 @@ fn features_supported(instance : &Instance, physical_device : vk::PhysicalDevice
     true
 }
 
-fn surface_supported(instance : &Instance, surface : vk::SurfaceKHR, physical_device : vk::PhysicalDevice) -> bool {
-    true
+fn surface_supported(instance : &Instance, surface_loader : &Surface, surface : vk::SurfaceKHR, physical_device : vk::PhysicalDevice) -> Result<u32> {
+    unsafe {Ok(instance.get_physical_device_queue_family_properties(physical_device).iter().enumerate()
+        .find(|(index, qfp)| -> bool {
+            qfp.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+            && surface_loader.get_physical_device_surface_support(physical_device, *index as u32, surface)?
+        })?.0 as u32)}
 }
