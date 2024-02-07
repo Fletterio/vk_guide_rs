@@ -1,5 +1,3 @@
-mod internal_init;
-
 use ash::{vk, Entry};
 pub use ash::{Device, Instance};
 use sdl2::event::{Event, WindowEvent};
@@ -15,7 +13,6 @@ const WINDOW_TITLE: &'static str = "Vulkan Engine";
 const WINDOW_WIDTH: u32 = 1700;
 const WINDOW_HEIGHT: u32 = 900;
 
-#[derive(Debug)]
 pub struct VulkanEngine {
     pub is_initialized : bool,
     pub entry : Entry,
@@ -38,12 +35,11 @@ pub struct VulkanEngine {
 // Main loop functions
 impl VulkanEngine {
     pub fn init() -> Result<Self> {
-        unsafe {
             let window_extent = vk::Extent2D {width : 1700, height : 900};
             //SDL initialization
             //todo: not killed
-            let sdl_context = sdl2::init()?;
-            let video_subsystem = sdl_context.video()?;
+            let sdl_context = sdl2::init().unwrap();
+            let video_subsystem = sdl_context.video().unwrap();
             let window = video_subsystem.window(WINDOW_TITLE, WINDOW_WIDTH, WINDOW_HEIGHT)
                 .position_centered()
                 .vulkan()
@@ -51,7 +47,7 @@ impl VulkanEngine {
 
             //Vulkan initialization
             let entry = Entry::linked();
-            let instance = vk_bootstrap::create_instance(&entry, &window)?;
+            let instance = vk_bootstrap::create_instance(&entry, &window);
             //Debug Utils initialization
             #[cfg(debug_assertions)]
             let debug_utils_loader = DebugUtils::new(&entry, &instance);
@@ -60,7 +56,7 @@ impl VulkanEngine {
             //Surface initialization
             let surface_loader = Surface::new(&entry, &instance);
             let instance_handle = instance.handle().as_raw();
-            let surface = vk::SurfaceKHR::from_raw(window.vulkan_create_surface(instance_handle as VkInstance)?);
+            let surface = vk::SurfaceKHR::from_raw(window.vulkan_create_surface(instance_handle as VkInstance).unwrap());
             Ok(VulkanEngine {
                 is_initialized : true,
                 entry,
@@ -75,23 +71,22 @@ impl VulkanEngine {
                 debug_messenger,
                 surface_loader,
                 surface,
-                device,
-                chosen_gpu,
-                event_pump :
+                device : todo!(),
+                chosen_gpu : todo!(),
+                event_pump : todo!()
             })
-        }
     }
     pub fn run(&mut self) {
         let mut b_quit = false;
         let sdl_context = sdl2::init().unwrap();
         let mut event_pump = sdl_context.event_pump().unwrap();
         // main loop
-        while (!b_quit){
+        while !b_quit{
             // Handle events on queue
             for event in event_pump.poll_iter() {
                 match event {
-                    Event::Quit => {b_quit = true;},
-                    Event::Window(_,_, win_event) => {
+                    Event::Quit{..} => {b_quit = true;},
+                    Event::Window{win_event, ..} => {
                         match win_event {
                             WindowEvent::Minimized => {self.stop_rendering = true},
                             WindowEvent::Restored => {self.stop_rendering = false},
@@ -102,7 +97,7 @@ impl VulkanEngine {
                 };
             };
             //do not draw if we are minimized
-            if (self.stop_rendering){
+            if self.stop_rendering {
                 std::thread::sleep(std::time::Duration::from_millis(10));
                 continue;
             }

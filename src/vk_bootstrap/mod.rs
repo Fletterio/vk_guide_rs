@@ -1,47 +1,47 @@
 mod device;
 
-use std::ffi::CString;
-use std::os::raw::c_char;
+use std::ffi::{c_char, CString};
 use ash::{Device, Entry, Instance, vk};
 use sdl2::video::Window;
 use anyhow::Result;
 #[cfg(debug_assertions)]
 use ash::extensions::ext::DebugUtils;
-use ash::extensions::khr::Surface;
+use ash::extensions::khr::{Surface, Swapchain};
 use ash::vk::DebugUtilsMessengerEXT;
+#[cfg(debug_assertions)]
 use crate::vk_debug::vulkan_debug_callback;
-
 //-----------------------------INSTANCE-------------------------------
-pub fn create_instance(entry : &Entry, window : &Window) -> Result<Instance> {
+pub fn create_instance(entry : &Entry, window : &Window) -> Instance {
     let app_info = vk::ApplicationInfo::builder()
-        .application_name(CString::new("Vulkan Application")?.as_c_str())
+        .application_name(CString::new("Vulkan Application").unwrap().as_c_str())
         .application_version(vk::make_api_version(0,0,1,0))
-        .engine_name(CString::new("No Engine")?.as_c_str())
+        .engine_name(CString::new("No Engine").unwrap().as_c_str())
         .engine_version(vk::make_api_version(0,0,1,0))
         .api_version(vk::make_api_version(0,1,3,0))
         .build();
 
-    let mut extension_names = ash_window::enumerate_required_extensions(window.raw_display_handle())?
-        .to_vec();
+    let mut extension_names : Vec<*const c_char> = window.vulkan_instance_extensions().unwrap().iter()
+        .map(|name| -> *const c_char {
+            name.as_ptr() as *const c_char
+        })
+        .collect();
     #[cfg(debug_assertions)]
-    extension_names.push(DebugUtils::NAME_as_ptr());
-
-    #[cfg(debug_assertions)]
-    let layer_properties = entry.enumerate_instance_layer_properties()?;
-    let mut layer_names : Vec<*const c_char> = Vec::new();
-    #[cfg(debug_assertions)]
-    layer_names = layer_properties.iter().map(|lp| {lp.layer_name.as_ptr()}).collect();
-
-    let instance_create_info = vk::InstanceCreateInfo::builder()
+    extension_names.push(DebugUtils::name().as_ptr());
+    let mut instance_create_info = vk::InstanceCreateInfo::builder()
         .application_info(&app_info)
-        .enabled_extension_names(&layer_names);
-
-    unsafe {Ok(entry.create_instance(&instance_create_info, None)?)}
+        .enabled_extension_names(&extension_names);
+    cfg_if::cfg_if!{
+        if #[cfg(debug_assertions)]{
+            let _layer_names = [b"VK_LAYER_KHRONOS_validation\0".as_ptr() as *const c_char];
+            instance_create_info = instance_create_info.enabled_layer_names(&_layer_names);
+        }
+    }
+    unsafe {entry.create_instance(&(instance_create_info.build()), None).unwrap()}
 }
 //---------------------------------------DEBUG-----------------------------------------
 #[cfg(debug_assertions)]
 pub fn create_debug_messenger(debug_utils_loader : &DebugUtils) -> Result<DebugUtilsMessengerEXT>{
-    let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
+    let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
         .message_severity(
             vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
                 | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
@@ -52,7 +52,8 @@ pub fn create_debug_messenger(debug_utils_loader : &DebugUtils) -> Result<DebugU
                 | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
                 | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
         )
-        .pfn_user_callback(Some(vulkan_debug_callback));
+        .pfn_user_callback(Some(vulkan_debug_callback))
+        .build();
 
     unsafe {Ok(debug_utils_loader.create_debug_utils_messenger(&debug_info, None)?)}
 }
@@ -61,10 +62,26 @@ pub fn create_debug_messenger(debug_utils_loader : &DebugUtils) -> Result<DebugU
 pub fn create_device(instance : &Instance, surface_loader : &Surface, surface : vk::SurfaceKHR) -> Result<(Device, vk::PhysicalDevice)> {
     let (physical_device, queue_index) = device::pick_physical_device_and_queue(instance, surface_loader, surface)?;
     let priorities = [1.0];
-    let queue_info = vk::DeviceQueueCreateInfo::builder()
+    let queue_info = [vk::DeviceQueueCreateInfo::builder()
         .queue_family_index(queue_index)
-        .queue_priorities(&priorities);
+        .queue_priorities(&priorities)
+        .build()];
 
-    let features = vk::PhysicalDeviceFeatures::default();
-    let foo = vk::DeviceCreateInfo::default();
+    let mut features13 = vk::PhysicalDeviceVulkan13Features::builder()
+        .dynamic_rendering(true)
+        .synchronization2(true)
+        .build();
+    let mut features12 = vk::PhysicalDeviceVulkan12Features::builder()
+        .buffer_device_address(true)
+        .descriptor_indexing(true)
+        .build();
+    let device_extension_names = [Swapchain::name().as_ptr()];
+
+    let device_create_info = vk::DeviceCreateInfo::builder()
+        .queue_create_infos(&queue_info)
+        .enabled_extension_names(&device_extension_names)
+        .push_next(&mut features13)
+        .push_next(&mut features12)
+        .build();
+    unsafe {Ok((instance.create_device(physical_device, &device_create_info, None)?, physical_device))}
 }
