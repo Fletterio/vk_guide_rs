@@ -1,6 +1,6 @@
+use ash::vk;
 use std::borrow::Cow;
 use std::ffi::CStr;
-use ash::vk;
 
 #[cfg(debug_assertions)]
 pub unsafe extern "system" fn vulkan_debug_callback(
@@ -26,16 +26,16 @@ pub unsafe extern "system" fn vulkan_debug_callback(
     match message_severity {
         vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => {
             log::debug!("{message_severity:?}:\n{message_type:?} [{message_id_name} ({message_id_number})] : {message}\n");
-        },
+        }
         vk::DebugUtilsMessageSeverityFlagsEXT::INFO => {
             log::info!("{message_severity:?}:\n{message_type:?} [{message_id_name} ({message_id_number})] : {message}\n");
-        },
+        }
         vk::DebugUtilsMessageSeverityFlagsEXT::WARNING => {
             log::warn!("{message_severity:?}:\n{message_type:?} [{message_id_name} ({message_id_number})] : {message}\n");
-        },
+        }
         _ => {
             log::error!("{message_severity:?}:\n{message_type:?} [{message_id_name} ({message_id_number})] : {message}\n");
-        },
+        }
     }
 
     vk::FALSE
