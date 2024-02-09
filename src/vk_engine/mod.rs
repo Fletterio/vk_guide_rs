@@ -1,7 +1,7 @@
 use crate::vk_bootstrap;
 use anyhow::Result;
 use ash::extensions::ext::DebugUtils;
-use ash::extensions::khr::Surface;
+use ash::extensions::khr::{Surface, Swapchain};
 use ash::vk::Handle;
 use ash::{vk, Entry};
 pub use ash::{Device, Instance};
@@ -30,10 +30,11 @@ pub struct VulkanEngine {
     pub device: Device,
     pub chosen_gpu: vk::PhysicalDevice,
     //swapchainStuff
+    pub swapchain_loader : Swapchain,
     pub swapchain : vk::SwapchainKHR,
     pub swapchainImageFormat : vk::Format,
     pub swapchainImages : Vec<vk::Image>,
-    pub swapchainImageViews : vk::ImageView,
+    pub swapchainImageViews : Vec<vk::ImageView>,
     pub swapchainExtent : vk::Extent2D,
     //window event pump
     pub event_pump: EventPump,
@@ -90,6 +91,7 @@ impl VulkanEngine {
             surface,
             device,
             chosen_gpu,
+            swapchain_loader : todo!(),
             swapchain : todo!(),
             swapchainImageFormat : todo!(),
             swapchainImages : todo!(),
@@ -100,12 +102,10 @@ impl VulkanEngine {
     }
     pub fn run(&mut self) {
         let mut b_quit = false;
-        let sdl_context = sdl2::init().unwrap();
-        let mut event_pump = sdl_context.event_pump().unwrap();
         // main loop
         while !b_quit {
             // Handle events on queue
-            for event in event_pump.poll_iter() {
+            for event in self.event_pump.poll_iter() {
                 match event {
                     Event::Quit { .. } => {
                         b_quit = true;

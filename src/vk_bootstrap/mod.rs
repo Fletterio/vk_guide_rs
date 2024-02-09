@@ -102,6 +102,19 @@ pub fn create_device(
 }
 
 //-------------------SWAPCHAIN-----------------------
-pub fn create_swapchain(extent : vk::Extent2D) -> (){
-
+pub fn create_swapchain(instance : &Instance, device : &Device, extent : vk::Extent2D) -> (Swapchain, vk::SwapchainKHR, vk::Format, Vec<vk::Image>, Vec<vk::ImageView>){
+    let swapchain_loader = Swapchain::new(instance, device);
+    let swapchain_image_format = vk::Format::B8G8R8_UNORM;
+    let swapchain_create_info = vk::SwapchainCreateInfoKHR::builder()
+        .image_format(swapchain_image_format)
+        .image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
+        .present_mode(vk::PresentModeKHR::FIFO)
+        .image_extent(extent)
+        .image_usage(vk::ImageUsageFlags::TRANSFER_DST)
+        .min_image_count(2)
+        .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .
+        .build();
+    let swapchain = unsafe {swapchain_loader.create_swapchain(&swapchain_create_info, None)?};
+    let swapchain_images =
 }
