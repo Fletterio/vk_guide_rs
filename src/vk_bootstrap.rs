@@ -6,7 +6,7 @@ use anyhow::Result;
 #[cfg(debug_assertions)]
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Swapchain};
-use ash::vk::DebugUtilsMessengerEXT;
+use ash::vk::{DebugUtilsMessengerEXT, SurfaceFormatKHR, SwapchainKHR};
 use ash::{vk, Device, Entry, Instance};
 use sdl2::video::Window;
 use std::ffi::{c_char, CString};
@@ -102,19 +102,69 @@ pub fn create_device(
 }
 
 //-------------------SWAPCHAIN-----------------------
-pub fn create_swapchain(instance : &Instance, device : &Device, extent : vk::Extent2D) -> (Swapchain, vk::SwapchainKHR, vk::Format, Vec<vk::Image>, Vec<vk::ImageView>){
+pub fn create_swapchain(instance : &Instance, device : &Device, physical_device : vk::PhysicalDevice, surface_loader : &Surface, surface: vk::SurfaceKHR, extent : vk::Extent2D) -> (Swapchain, vk::SwapchainKHR, vk::SurfaceFormatKHR, Vec<vk::Image>, Vec<vk::ImageView>, vk::Extent2D){
+    let surface_format = SurfaceFormatKHR{format : vk::Format::B8G8R8_UNORM, color_space : vk::ColorSpaceKHR::SRGB_NONLINEAR};
+    let surface_capabilities = unsafe {surface_loader.get_physical_device_surface_capabilities(physical_device, surface).unwrap()};
+    let mut desired_image_count = surface_capabilities.min_image_count + 1;
+    if surface_capabilities.max_image_count > 0
+        && desired_image_count > surface_capabilities.max_image_count
+    {
+        desired_image_count = surface_capabilities.max_image_count;
+    }
+    let surface_extent = match surface_capabilities.current_extent.width {
+        u32::MAX => extent,
+        _ => surface_capabilities.current_extent,
+    };
+    let pre_transform = if surface_capabilities
+        .supported_transforms
+        .contains(vk::SurfaceTransformFlagsKHR::IDENTITY)
+    {
+        vk::SurfaceTransformFlagsKHR::IDENTITY
+    } else {
+        surface_capabilities.current_transform
+    };
+
     let swapchain_loader = Swapchain::new(instance, device);
-    let swapchain_image_format = vk::Format::B8G8R8_UNORM;
+
     let swapchain_create_info = vk::SwapchainCreateInfoKHR::builder()
-        .image_format(swapchain_image_format)
-        .image_color_space(vk::ColorSpaceKHR::SRGB_NONLINEAR)
+        .surface(surface)
+        .image_format(surface_format.format)
+        .image_color_space(surface_format.color_space)
         .present_mode(vk::PresentModeKHR::FIFO)
         .image_extent(extent)
         .image_usage(vk::ImageUsageFlags::TRANSFER_DST)
         .min_image_count(2)
         .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .
+        .pre_transform(pre_transform)
+        .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+        .clipped(true)
+        .image_array_layers(1)
         .build();
-    let swapchain = unsafe {swapchain_loader.create_swapchain(&swapchain_create_info, None)?};
-    let swapchain_images =
+    let swapchain = unsafe {swapchain_loader.create_swapchain(&swapchain_create_info, None).unwrap()};
+    let swapchain_images = unsafe {swapchain_loader.get_swapchain_images(swapchain).unwrap()};
+    let swapchain_image_views : Vec<vk::ImageView> = swapchain_images
+        .iter()
+        .map(|&image| {
+            let create_view_info = vk::ImageViewCreateInfo::builder()
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(surface_format.format)
+                .components(vk::ComponentMapping {
+                    r: vk::ComponentSwizzle::IDENTITY,
+                    g: vk::ComponentSwizzle::IDENTITY,
+                    b: vk::ComponentSwizzle::IDENTITY,
+                    a: vk::ComponentSwizzle::IDENTITY,
+                })
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                })
+                .image(image);
+            unsafe {device.create_image_view(&create_view_info, None).unwrap()}
+        })
+        .collect();
+
+    (swapchain_loader, swapchain, surface_format, swapchain_images, swapchain_image_views, surface_extent)
 }

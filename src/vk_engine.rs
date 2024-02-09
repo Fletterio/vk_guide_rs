@@ -28,14 +28,14 @@ pub struct VulkanEngine {
     pub surface_loader: Surface,
     pub surface: vk::SurfaceKHR,
     pub device: Device,
-    pub chosen_gpu: vk::PhysicalDevice,
+    pub physical_device: vk::PhysicalDevice,
     //swapchainStuff
+    pub swapchain_extent : vk::Extent2D,
     pub swapchain_loader : Swapchain,
     pub swapchain : vk::SwapchainKHR,
-    pub swapchainImageFormat : vk::Format,
-    pub swapchainImages : Vec<vk::Image>,
-    pub swapchainImageViews : Vec<vk::ImageView>,
-    pub swapchainExtent : vk::Extent2D,
+    pub swapchain_image_format : vk::SurfaceFormatKHR,
+    pub swapchain_images : Vec<vk::Image>,
+    pub swapchain_image_views : Vec<vk::ImageView>,
     //window event pump
     pub event_pump: EventPump,
 }
@@ -62,9 +62,9 @@ impl VulkanEngine {
         let instance = vk_bootstrap::create_instance(&entry, &window);
         //Debug Utils initialization
         #[cfg(debug_assertions)]
-        let debug_utils_loader = DebugUtils::new(&entry, &instance);
+            let debug_utils_loader = DebugUtils::new(&entry, &instance);
         #[cfg(debug_assertions)]
-        let debug_messenger = vk_bootstrap::create_debug_messenger(&debug_utils_loader);
+            let debug_messenger = vk_bootstrap::create_debug_messenger(&debug_utils_loader);
         //Surface initialization
         let surface_loader = Surface::new(&entry, &instance);
         let instance_handle = instance.handle().as_raw();
@@ -73,8 +73,9 @@ impl VulkanEngine {
                 .vulkan_create_surface(instance_handle as VkInstance)
                 .unwrap(),
         );
-        let (device, chosen_gpu) = vk_bootstrap::create_device(&instance, &surface_loader, surface);
+        let (device, physical_device) = vk_bootstrap::create_device(&instance, &surface_loader, surface);
         let event_pump = sdl_context.event_pump().unwrap();
+        let (swapchain_loader, swapchain, swapchain_image_format, swapchain_images, swapchain_image_views, swapchain_extent) = vk_bootstrap::create_swapchain(&instance, &device, physical_device, &surface_loader, surface, window_extent);
         Ok(VulkanEngine {
             is_initialized: true,
             entry,
@@ -90,13 +91,13 @@ impl VulkanEngine {
             surface_loader,
             surface,
             device,
-            chosen_gpu,
-            swapchain_loader : todo!(),
-            swapchain : todo!(),
-            swapchainImageFormat : todo!(),
-            swapchainImages : todo!(),
-            swapchainImageViews : todo!(),
-            swapchainExtent : todo!(),
+            physical_device,
+            swapchain_extent,
+            swapchain_loader,
+            swapchain,
+            swapchain_image_format,
+            swapchain_images,
+            swapchain_image_views,
             event_pump,
         })
     }
