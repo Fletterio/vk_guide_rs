@@ -13,7 +13,7 @@ pub fn transition_image(device :  &Device, cmd : vk::CommandBuffer, image : vk::
         .new_layout(new_layout);
 
     let aspect_mask = if new_layout == vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL {vk::ImageAspectFlags::DEPTH} else {vk::ImageAspectFlags::COLOR};
-    image_barrier.subresource_range(vk_init::image_subresource_range(aspect_mask))
+    image_barrier = image_barrier.subresource_range(vk_init::image_subresource_range(aspect_mask))
         .image(image);
 
     let dependency_info = vk::DependencyInfo::builder()

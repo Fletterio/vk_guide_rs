@@ -12,7 +12,7 @@ pub struct FrameData {
 }
 
 impl VulkanEngine {
-    pub fn get_current_frame(&mut self) -> &mut FrameData {
-        &mut self.frames[(self.frame_number % FRAME_OVERLAP as i32) as usize]
+    pub fn get_current_frame(&self) -> &FrameData {
+        &self.frames[(self.frame_number % FRAME_OVERLAP as i32) as usize]
     }
 }

@@ -13,7 +13,7 @@ use sdl2::event::{Event, WindowEvent};
 use sdl2::sys::VkInstance;
 use sdl2::EventPump;
 use frame_data::{FrameData, FRAME_OVERLAP};
-use crate::vk_init;
+use crate::{vk_init, vk_images};
 
 const WINDOW_TITLE: &'static str = "Vulkan Engine";
 const WINDOW_WIDTH: u32 = 1700;
@@ -153,11 +153,45 @@ impl VulkanEngine {
         let cmd = self.get_current_frame().main_command_buffer;
         //since waiting on the fence means that commands have finished executing, we can reset the buffer
         unsafe {self.device.reset_command_buffer(cmd, CommandBufferResetFlags::empty()).unwrap()}
+
         //The command buffer is submitted only once to the GPU
         let cmd_begin_info = vk_init::command_buffer_begin_info(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
         //Begin the command buffer for instruction submmission
         unsafe {self.device.begin_command_buffer(cmd, &cmd_begin_info).unwrap()}
-        
+
+        //make the swapchain image into writeable mode before rendering
+        vk_images::transition_image(&self.device, cmd, self.swapchain_images[swapchain_image_index], vk::ImageLayout::UNDEFINED, vk::ImageLayout::GENERAL);
+
+        //make a clear-color from frame number. This will flash with a 120 frame period.
+        let flash = (self.frame_number as f32/ 120f32).sin().abs();
+        let clear_value = vk::ClearColorValue{float32 : [0f32, 0f32, flash, 1f32]};
+
+        let clear_range = vk_init::image_subresource_range(vk::ImageAspectFlags::COLOR);
+
+        //clear image
+        unsafe {self.device.cmd_clear_color_image(cmd, self.swapchain_images[swapchain_image_index], vk::ImageLayout::GENERAL, &clear_value, slice::from_ref(&clear_range))};
+
+        //make the swapchain image into presentable mode
+        vk_images::transition_image(&self.device, cmd, self.swapchain_images[swapchain_image_index], vk::ImageLayout::GENERAL, vk::ImageLayout::PRESENT_SRC_KHR);
+
+        //finalize the command buffer (we can no longer add commands, but it can now be executed)
+        unsafe {self.device.end_command_buffer(cmd).unwrap()};
+
+        //prepare the submission to the queue.
+        //we want to wait on the _presentSemaphore, as that semaphore is signaled when the swapchain is ready
+        //we will signal the _renderSemaphore, to signal that rendering has finished
+        let cmd_info = vk_init::command_buffer_submit_info(cmd);
+
+        let wait_info = vk_init::semaphore_submit_info(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT_KHR, self.get_current_frame().swapchain_semaphore);
+        let signal_info = vk_init::semaphore_submit_info(vk::PipelineStageFlags2::ALL_GRAPHICS, self.get_current_frame().render_semaphore);
+
+        let submit = vk_init::submit_info(&cmd_info, Some(&signal_info), Some(&wait_info));
+
+        //submit command buffer to the queue and execute it.
+        // render_fence will now block until the graphic commands finish execution
+        unsafe {self.device.queue_submit2(self.graphics_queue, slice::from_ref(&submit), self.get_current_frame().render_fence).unwrap()}
+
     }
 }
 
