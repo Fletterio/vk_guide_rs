@@ -26,3 +26,19 @@ pub fn semaphore_create_info(flags : vk::SemaphoreCreateFlags) -> vk::SemaphoreC
         .flags(flags)
         .build()
 }
+
+pub fn command_buffer_begin_info(flags : vk::CommandBufferUsageFlags) -> vk::CommandBufferBeginInfo {
+    vk::CommandBufferBeginInfo::builder()
+        .flags(flags)
+        .build()
+}
+
+pub fn image_subresource_range(aspect_mask : vk::ImageAspectFlags) -> vk::ImageSubresourceRange {
+    vk::ImageSubresourceRange::builder()
+        .aspect_mask(aspect_mask)
+        .base_mip_level(0)
+        .level_count(vk::REMAINING_MIP_LEVELS)
+        .base_array_layer(0)
+        .layer_count(vk::REMAINING_ARRAY_LAYERS)
+        .build()
+}

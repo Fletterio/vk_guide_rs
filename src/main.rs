@@ -3,6 +3,7 @@ mod vk_debug;
 mod vk_engine;
 mod vk_types;
 mod vk_init;
+mod vk_images;
 
 use vk_engine::VulkanEngine;
 

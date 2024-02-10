@@ -1,17 +1,19 @@
 mod destructors;
 pub mod frame_data;
 
+use std::slice;
 use crate::vk_bootstrap;
 use anyhow::Result;
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Swapchain};
-use ash::vk::Handle;
+use ash::vk::{CommandBufferResetFlags, Fence, Handle};
 use ash::{vk, Entry};
 pub use ash::{Device, Instance};
 use sdl2::event::{Event, WindowEvent};
 use sdl2::sys::VkInstance;
 use sdl2::EventPump;
 use frame_data::{FrameData, FRAME_OVERLAP};
+use crate::vk_init;
 
 const WINDOW_TITLE: &'static str = "Vulkan Engine";
 const WINDOW_WIDTH: u32 = 1700;
@@ -144,7 +146,18 @@ impl VulkanEngine {
         }
     }
     pub fn draw(&mut self) {
-        todo!()
+        unsafe {self.device.wait_for_fences(slice::from_ref(&self.get_current_frame().render_fence), true, 1000000000).unwrap()}
+        unsafe {self.device.reset_fences(slice::from_ref(&self.get_current_frame().render_fence)).unwrap()}
+
+        let swapchain_image_index = unsafe {self.swapchain_loader.acquire_next_image(self.swapchain, 1000000000, self.get_current_frame().swapchain_semaphore, Fence::null()).unwrap().0};
+        let cmd = self.get_current_frame().main_command_buffer;
+        //since waiting on the fence means that commands have finished executing, we can reset the buffer
+        unsafe {self.device.reset_command_buffer(cmd, CommandBufferResetFlags::empty()).unwrap()}
+        //The command buffer is submitted only once to the GPU
+        let cmd_begin_info = vk_init::command_buffer_begin_info(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        //Begin the command buffer for instruction submmission
+        unsafe {self.device.begin_command_buffer(cmd, &cmd_begin_info).unwrap()}
+        
     }
 }
 
