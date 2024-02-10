@@ -1,3 +1,5 @@
+mod destructors;
+
 use crate::vk_bootstrap;
 use anyhow::Result;
 use ash::extensions::ext::DebugUtils;
@@ -55,7 +57,7 @@ impl VulkanEngine {
             .window(WINDOW_TITLE, WINDOW_WIDTH, WINDOW_HEIGHT)
             .position_centered()
             .vulkan()
-            .build()?;
+            .build().unwrap();
 
         //Vulkan initialization
         let entry = Entry::linked();
@@ -136,6 +138,17 @@ impl VulkanEngine {
 
 impl Drop for VulkanEngine {
     fn drop(&mut self) {
-        todo!()
+        if(self.is_initialized){
+            self.destroy_swapchain();
+
+            unsafe {
+                self.surface_loader.destroy_surface(self.surface, None);
+                self.device.destroy_device(None);
+
+                self.debug_utils_loader.destroy_debug_utils_messenger(self.debug_messenger, None);
+                self.instance.destroy_instance(None);
+
+            };
+        }
     }
 }

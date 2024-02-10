@@ -103,7 +103,7 @@ pub fn create_device(
 
 //-------------------SWAPCHAIN-----------------------
 pub fn create_swapchain(instance : &Instance, device : &Device, physical_device : vk::PhysicalDevice, surface_loader : &Surface, surface: vk::SurfaceKHR, extent : vk::Extent2D) -> (Swapchain, vk::SwapchainKHR, vk::SurfaceFormatKHR, Vec<vk::Image>, Vec<vk::ImageView>, vk::Extent2D){
-    let surface_format = SurfaceFormatKHR{format : vk::Format::B8G8R8_UNORM, color_space : vk::ColorSpaceKHR::SRGB_NONLINEAR};
+    let surface_format = SurfaceFormatKHR{format : vk::Format::B8G8R8A8_UNORM, color_space : vk::ColorSpaceKHR::SRGB_NONLINEAR};
     let surface_capabilities = unsafe {surface_loader.get_physical_device_surface_capabilities(physical_device, surface).unwrap()};
     let mut desired_image_count = surface_capabilities.min_image_count + 1;
     if surface_capabilities.max_image_count > 0
@@ -132,8 +132,8 @@ pub fn create_swapchain(instance : &Instance, device : &Device, physical_device 
         .image_color_space(surface_format.color_space)
         .present_mode(vk::PresentModeKHR::FIFO)
         .image_extent(extent)
-        .image_usage(vk::ImageUsageFlags::TRANSFER_DST)
-        .min_image_count(2)
+        .image_usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::COLOR_ATTACHMENT)
+        .min_image_count(desired_image_count)
         .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
         .pre_transform(pre_transform)
         .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
