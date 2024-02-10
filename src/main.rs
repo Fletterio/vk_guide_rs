@@ -2,6 +2,7 @@ mod vk_bootstrap;
 mod vk_debug;
 mod vk_engine;
 mod vk_types;
+mod vk_init;
 
 use vk_engine::VulkanEngine;
 

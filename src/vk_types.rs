@@ -1,7 +1,7 @@
 #[macro_export]
 macro_rules! vk_check {
     ($x:ident) => {
-        let err = $x.result();
+        let err = $x;
         if let Err(e) = err {
             println!("Detected Vulkan error: {e}");
             ::std::process::abort();

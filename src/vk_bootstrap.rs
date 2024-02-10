@@ -9,6 +9,8 @@ use ash::vk::{DebugUtilsMessengerEXT, SurfaceFormatKHR};
 use ash::{vk, Device, Entry, Instance};
 use sdl2::video::Window;
 use std::ffi::{c_char, CString};
+use crate::vk_engine::frame_data::{FrameData, FRAME_OVERLAP};
+use crate::vk_init;
 
 //-----------------------------INSTANCE-------------------------------
 pub fn create_instance(entry: &Entry, window: &Window) -> Instance {
@@ -68,11 +70,11 @@ pub fn create_device(
     instance: &Instance,
     surface_loader: &Surface,
     surface: vk::SurfaceKHR,
-) -> (Device, vk::PhysicalDevice){
-    let (physical_device, queue_index) = device::pick_physical_device_and_queue(instance, surface_loader, surface);
+) -> (Device, vk::PhysicalDevice, vk::Queue, u32){
+    let (physical_device, queue_family_index) = device::pick_physical_device_and_queue(instance, surface_loader, surface);
     let priorities = [1.0];
     let queue_info = [vk::DeviceQueueCreateInfo::builder()
-        .queue_family_index(queue_index)
+        .queue_family_index(queue_family_index)
         .queue_priorities(&priorities)
         .build()];
 
@@ -92,12 +94,16 @@ pub fn create_device(
         .push_next(&mut features13)
         .push_next(&mut features12)
         .build();
-    unsafe {
-        (
-            instance.create_device(physical_device, &device_create_info, None).unwrap(),
-            physical_device,
-        )
-    }
+    let device : Device = unsafe {instance.create_device(physical_device, &device_create_info, None).unwrap()};
+    let graphics_queue = unsafe  {device.get_device_queue(queue_family_index, 0)};
+
+    (
+        device,
+        physical_device,
+        graphics_queue,
+        queue_family_index
+    )
+
 }
 
 //-------------------SWAPCHAIN-----------------------
@@ -166,4 +172,53 @@ pub fn create_swapchain(instance : &Instance, device : &Device, physical_device 
         .collect();
 
     (swapchain_loader, swapchain, surface_format, swapchain_images, swapchain_image_views, surface_extent)
+}
+
+pub fn init_frames(device : &Device, graphics_queue_family : u32) -> [FrameData; FRAME_OVERLAP] {
+    let command_stuff = init_commands(device, graphics_queue_family);
+    let sync_structures = init_sync_structures(device);
+    let frames : [FrameData; FRAME_OVERLAP] = (0..FRAME_OVERLAP)
+        .map(|frame| -> FrameData {
+            FrameData {
+                command_pool : command_stuff[frame].0,
+                main_command_buffer : command_stuff[frame].1,
+                swapchain_semaphore : sync_structures[frame].0,
+                render_semaphore : sync_structures[frame].1,
+                render_fence : sync_structures[frame].2
+            }
+        }).collect::<Vec<FrameData>>()
+        .try_into()
+        .unwrap();
+    frames
+}
+
+fn init_commands(device : &Device, graphics_queue_family : u32) -> [(vk::CommandPool, vk::CommandBuffer); FRAME_OVERLAP] {
+    let command_pool_info= vk_init::command_pool_create_info(graphics_queue_family, vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+    let commands : [(vk::CommandPool, vk::CommandBuffer); FRAME_OVERLAP] = (0..FRAME_OVERLAP)
+        .map(|_| -> (vk::CommandPool, vk::CommandBuffer) {
+            let command_pool = unsafe {device.create_command_pool(&command_pool_info, None).unwrap()};
+            let cmd_alloc_info = vk_init::command_buffer_allocate_info(command_pool, 1);
+            let main_command_buffer = unsafe {device.allocate_command_buffers(&cmd_alloc_info).unwrap()[0]};
+            (command_pool, main_command_buffer)
+        })
+        .collect::<Vec<(vk::CommandPool, vk::CommandBuffer)>>()
+        .try_into()
+        .unwrap();
+    commands
+}
+
+fn init_sync_structures(device : &Device) -> [(vk::Semaphore, vk::Semaphore, vk::Fence); FRAME_OVERLAP] {
+    let fence_create_info = vk_init::fence_create_info(vk::FenceCreateFlags::SIGNALED);
+    let semaphore_create_info = vk_init::semaphore_create_info(vk::SemaphoreCreateFlags::empty());
+
+    let structures : [(vk::Semaphore, vk::Semaphore, vk::Fence); FRAME_OVERLAP] = (0..FRAME_OVERLAP)
+        .map(|_| -> (vk::Semaphore, vk::Semaphore, vk::Fence) {
+            let render_fence = unsafe {device.create_fence(&fence_create_info, None).unwrap()};
+            let (swapchain_semaphore, render_semaphore) = unsafe{(device.create_semaphore(&semaphore_create_info, None).unwrap(), device.create_semaphore(&semaphore_create_info, None).unwrap())};
+            (swapchain_semaphore, render_semaphore, render_fence)
+        })
+        .collect::<Vec<(vk::Semaphore, vk::Semaphore, vk::Fence)>>()
+        .try_into()
+        .unwrap();
+    structures
 }

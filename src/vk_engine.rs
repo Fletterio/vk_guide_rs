@@ -1,4 +1,5 @@
 mod destructors;
+pub mod frame_data;
 
 use crate::vk_bootstrap;
 use anyhow::Result;
@@ -10,6 +11,7 @@ pub use ash::{Device, Instance};
 use sdl2::event::{Event, WindowEvent};
 use sdl2::sys::VkInstance;
 use sdl2::EventPump;
+use frame_data::{FrameData, FRAME_OVERLAP};
 
 const WINDOW_TITLE: &'static str = "Vulkan Engine";
 const WINDOW_WIDTH: u32 = 1700;
@@ -40,6 +42,11 @@ pub struct VulkanEngine {
     pub swapchain_image_views : Vec<vk::ImageView>,
     //window event pump
     pub event_pump: EventPump,
+    //frameStuff
+    pub frames : [FrameData; FRAME_OVERLAP],
+    //queueStuff
+    pub graphics_queue : vk::Queue,
+    pub graphics_queue_family : u32,
 }
 
 // Main loop functions
@@ -75,9 +82,11 @@ impl VulkanEngine {
                 .vulkan_create_surface(instance_handle as VkInstance)
                 .unwrap(),
         );
-        let (device, physical_device) = vk_bootstrap::create_device(&instance, &surface_loader, surface);
+        let (device, physical_device, graphics_queue, graphics_queue_family) = vk_bootstrap::create_device(&instance, &surface_loader, surface);
         let event_pump = sdl_context.event_pump().unwrap();
         let (swapchain_loader, swapchain, swapchain_image_format, swapchain_images, swapchain_image_views, swapchain_extent) = vk_bootstrap::create_swapchain(&instance, &device, physical_device, &surface_loader, surface, window_extent);
+        let frames = vk_bootstrap::init_frames(&device, graphics_queue_family);
+
         Ok(VulkanEngine {
             is_initialized: true,
             entry,
@@ -101,6 +110,9 @@ impl VulkanEngine {
             swapchain_images,
             swapchain_image_views,
             event_pump,
+            frames,
+            graphics_queue,
+            graphics_queue_family
         })
     }
     pub fn run(&mut self) {
@@ -139,6 +151,12 @@ impl VulkanEngine {
 impl Drop for VulkanEngine {
     fn drop(&mut self) {
         if self.is_initialized{
+            unsafe {self.device.device_wait_idle().unwrap();}
+
+            for frame_data in self.frames.iter() {
+                unsafe {self.device.destroy_command_pool(frame_data.command_pool, None)};
+            }
+
             self.destroy_swapchain();
 
             unsafe {

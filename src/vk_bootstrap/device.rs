@@ -16,9 +16,9 @@ pub fn pick_physical_device_and_queue(
     let mut result = None;
     for &physical_device in physical_devices.iter() {
         match is_physical_device_suitable(instance, surface_loader, surface, physical_device) {
-            Some(index) => {
+            Some(queue_family_index) => {
                 if result.is_none() {
-                    result = Some((physical_device, index));
+                    result = Some((physical_device, queue_family_index));
                     break;
                 }
             }
@@ -40,9 +40,9 @@ fn is_physical_device_suitable(
     surface: vk::SurfaceKHR,
     physical_device: vk::PhysicalDevice,
 ) -> Option<u32> {
-    let index = surface_supported(instance, surface_loader, surface, physical_device);
+    let queue_family_index = surface_supported(instance, surface_loader, surface, physical_device);
     if features_supported(instance, physical_device) {
-        Some(index)
+        Some(queue_family_index)
     } else {
         None
     }
@@ -89,12 +89,12 @@ fn surface_supported(
             .get_physical_device_queue_family_properties(physical_device)
             .iter()
             .enumerate()
-            .find(|(index, qfp): &(usize, &QueueFamilyProperties)| -> bool {
+            .find(|(queue_family_index, qfp): &(usize, &QueueFamilyProperties)| -> bool {
                 qfp.queue_flags.contains(vk::QueueFlags::GRAPHICS)
                     && surface_loader
                         .get_physical_device_surface_support(
                             physical_device,
-                            *index as u32,
+                            *queue_family_index as u32,
                             surface,
                         )
                         .unwrap()
