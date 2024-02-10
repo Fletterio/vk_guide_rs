@@ -1,4 +1,3 @@
-use anyhow::{anyhow, Result};
 use ash::extensions::khr::Surface;
 use ash::vk::{BaseOutStructure, QueueFamilyProperties};
 use ash::{vk, Instance};

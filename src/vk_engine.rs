@@ -138,7 +138,7 @@ impl VulkanEngine {
 
 impl Drop for VulkanEngine {
     fn drop(&mut self) {
-        if(self.is_initialized){
+        if self.is_initialized{
             self.destroy_swapchain();
 
             unsafe {

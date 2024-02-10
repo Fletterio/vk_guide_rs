@@ -2,11 +2,10 @@ mod device;
 
 #[cfg(debug_assertions)]
 use crate::vk_debug::vulkan_debug_callback;
-use anyhow::Result;
 #[cfg(debug_assertions)]
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Swapchain};
-use ash::vk::{DebugUtilsMessengerEXT, SurfaceFormatKHR, SwapchainKHR};
+use ash::vk::{DebugUtilsMessengerEXT, SurfaceFormatKHR};
 use ash::{vk, Device, Entry, Instance};
 use sdl2::video::Window;
 use std::ffi::{c_char, CString};
