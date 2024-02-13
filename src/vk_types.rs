@@ -1,21 +1,18 @@
-#[macro_export]
-macro_rules! vk_check {
-    ($x:ident) => {
-        let err = $x;
-        if let Err(e) = err {
-            println!("Detected Vulkan error: {e}");
-            ::std::process::abort();
-        };
-    };
+use std::cell::OnceCell;
+use ash::{Device, vk};
+
+pub struct AllocatedImage {
+    pub image: vk::Image,
+    pub image_view: vk::ImageView,
+    pub allocation: OnceCell<gpu_allocator::vulkan::Allocation>,
+    pub image_extent: vk::Extent3D,
+    pub image_format: vk::Format,
 }
 
-//Macro works, testing that something aborts is a pain in the ass
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn macro_check() {
-        let a = ::ash::vk::Result::SUCCESS;
-        vk_check!(a);
-        assert!(true);
+impl AllocatedImage {
+    pub unsafe fn dealloc(&mut self, device : &Device, allocator : &mut gpu_allocator::vulkan::Allocator) {
+        unsafe {device.destroy_image_view(self.image_view, None)};
+        allocator.free(self.allocation.take().unwrap()).unwrap();
+        unsafe {device.destroy_image(self.image, None)};
     }
 }

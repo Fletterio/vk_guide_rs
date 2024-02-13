@@ -1,25 +1,28 @@
-mod destructors;
+pub mod destructors;
 pub mod frame_data;
 
-use std::slice;
+use std::marker::PhantomData;
 use crate::vk_bootstrap;
+use crate::vk_types::AllocatedImage;
+use crate::{vk_images, vk_init};
 use anyhow::Result;
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Swapchain};
-use ash::vk::{CommandBufferResetFlags, Fence, Handle};
+use ash::vk::{Handle};
 use ash::{vk, Entry};
 pub use ash::{Device, Instance};
+use frame_data::{FrameData, FRAME_OVERLAP};
 use sdl2::event::{Event, WindowEvent};
 use sdl2::sys::VkInstance;
 use sdl2::EventPump;
-use frame_data::{FrameData, FRAME_OVERLAP};
-use crate::{vk_init, vk_images};
+use std::slice;
 
 const WINDOW_TITLE: &'static str = "Vulkan Engine";
 const WINDOW_WIDTH: u32 = 1700;
 const WINDOW_HEIGHT: u32 = 900;
 
-pub struct VulkanEngine {
+pub struct VulkanEngine<'a> {
+    pub phantom : PhantomData<&'a u32>,
     pub is_initialized: bool,
     pub entry: Entry,
     pub frame_number: i32,
@@ -36,23 +39,28 @@ pub struct VulkanEngine {
     pub device: Device,
     pub physical_device: vk::PhysicalDevice,
     //swapchainStuff
-    pub swapchain_extent : vk::Extent2D,
-    pub swapchain_loader : Swapchain,
-    pub swapchain : vk::SwapchainKHR,
-    pub swapchain_image_format : vk::SurfaceFormatKHR,
-    pub swapchain_images : Vec<vk::Image>,
-    pub swapchain_image_views : Vec<vk::ImageView>,
+    pub swapchain_extent: vk::Extent2D,
+    pub swapchain_loader: Swapchain,
+    pub swapchain: vk::SwapchainKHR,
+    pub swapchain_image_format: vk::SurfaceFormatKHR,
+    pub swapchain_images: Vec<vk::Image>,
+    pub swapchain_image_views: Vec<vk::ImageView>,
     //window event pump
     pub event_pump: EventPump,
     //frameStuff
-    pub frames : [FrameData; FRAME_OVERLAP],
+    pub frames: [FrameData; FRAME_OVERLAP],
     //queueStuff
-    pub graphics_queue : vk::Queue,
-    pub graphics_queue_family : u32,
+    pub graphics_queue: vk::Queue,
+    pub graphics_queue_family: u32,
+    //memory allocation
+    pub allocator: gpu_allocator::vulkan::Allocator,
+    //draw resources
+    pub draw_image: AllocatedImage,
+    pub draw_extent: vk::Extent2D,
 }
 
 // Main loop functions
-impl VulkanEngine {
+impl<'a> VulkanEngine<'a> {
     pub fn init() -> Result<Self> {
         let window_extent = vk::Extent2D {
             width: 1700,
@@ -66,16 +74,17 @@ impl VulkanEngine {
             .window(WINDOW_TITLE, WINDOW_WIDTH, WINDOW_HEIGHT)
             .position_centered()
             .vulkan()
-            .build().unwrap();
+            .build()
+            .unwrap();
 
         //Vulkan initialization
         let entry = Entry::linked();
         let instance = vk_bootstrap::create_instance(&entry, &window);
         //Debug Utils initialization
         #[cfg(debug_assertions)]
-            let debug_utils_loader = DebugUtils::new(&entry, &instance);
+        let debug_utils_loader = DebugUtils::new(&entry, &instance);
         #[cfg(debug_assertions)]
-            let debug_messenger = vk_bootstrap::create_debug_messenger(&debug_utils_loader);
+        let debug_messenger = vk_bootstrap::create_debug_messenger(&debug_utils_loader);
         //Surface initialization
         let surface_loader = Surface::new(&entry, &instance);
         let instance_handle = instance.handle().as_raw();
@@ -84,12 +93,50 @@ impl VulkanEngine {
                 .vulkan_create_surface(instance_handle as VkInstance)
                 .unwrap(),
         );
-        let (device, physical_device, graphics_queue, graphics_queue_family) = vk_bootstrap::create_device(&instance, &surface_loader, surface);
+        //Device creation
+        let (device, physical_device, graphics_queue, graphics_queue_family) =
+            vk_bootstrap::create_device(&instance, &surface_loader, surface);
+        //Event pump
         let event_pump = sdl_context.event_pump().unwrap();
-        let (swapchain_loader, swapchain, swapchain_image_format, swapchain_images, swapchain_image_views, swapchain_extent) = vk_bootstrap::create_swapchain(&instance, &device, physical_device, &surface_loader, surface, window_extent);
+        //FrameData creation
         let frames = vk_bootstrap::init_frames(&device, graphics_queue_family);
 
+        //Allocator creation
+        let allocator_create_info = gpu_allocator::vulkan::AllocatorCreateDesc {
+            instance,
+            device,
+            physical_device,
+            debug_settings: Default::default(),
+            buffer_device_address: true,
+            allocation_sizes: Default::default(),
+        };
+        let mut allocator = gpu_allocator::vulkan::Allocator::new(&allocator_create_info).unwrap();
+        //let mut allocated_images : Vec<&mut AllocatedImage> = Vec::new();
+        //re-move for simplicity
+        let instance= allocator_create_info.instance;
+        let device = allocator_create_info.device;
+        let physical_device= allocator_create_info.physical_device;
+        //Swapchain creation
+        let (
+            swapchain_loader,
+            swapchain,
+            swapchain_image_format,
+            swapchain_images,
+            swapchain_image_views,
+            swapchain_extent,
+            draw_image
+        ) = vk_bootstrap::create_swapchain(
+            &instance,
+            &device,
+            physical_device,
+            &surface_loader,
+            surface,
+            window_extent,
+            &mut allocator,
+        );
+        //No need to add to deletion queue, drop method takes care of it
         Ok(VulkanEngine {
+            phantom: PhantomData,
             is_initialized: true,
             entry,
             frame_number: 0,
@@ -114,7 +161,10 @@ impl VulkanEngine {
             event_pump,
             frames,
             graphics_queue,
-            graphics_queue_family
+            graphics_queue_family,
+            allocator,
+            draw_image,
+            draw_extent : Default::default()
         })
     }
     pub fn run(&mut self) {
@@ -146,62 +196,166 @@ impl VulkanEngine {
         }
     }
     pub fn draw(&mut self) {
-        unsafe {self.device.wait_for_fences(slice::from_ref(&self.get_current_frame().render_fence), true, 1000000000).unwrap()}
-        unsafe {self.device.reset_fences(slice::from_ref(&self.get_current_frame().render_fence)).unwrap()}
+        unsafe {
+            self.device
+                .wait_for_fences(
+                    slice::from_ref(&self.get_current_frame().render_fence),
+                    true,
+                    1000000000,
+                )
+                .unwrap()
+        }
+        //delete all objects crated for last draw
+        unsafe {self.get_current_frame_mut().dealloc_last_frame();}
 
-        let swapchain_image_index = unsafe {self.swapchain_loader.acquire_next_image(self.swapchain, 1000000000, self.get_current_frame().swapchain_semaphore, Fence::null()).unwrap().0};
+        unsafe {
+            self.device
+                .reset_fences(slice::from_ref(&self.get_current_frame().render_fence))
+                .unwrap()
+        }
+
+        let swapchain_image_index = unsafe {
+            self.swapchain_loader
+                .acquire_next_image(
+                    self.swapchain,
+                    1000000000,
+                    self.get_current_frame().swapchain_semaphore,
+                    vk::Fence::null(),
+                )
+                .unwrap()
+                .0
+        };
         let cmd = self.get_current_frame().main_command_buffer;
         //since waiting on the fence means that commands have finished executing, we can reset the buffer
-        unsafe {self.device.reset_command_buffer(cmd, CommandBufferResetFlags::empty()).unwrap()}
+        unsafe {
+            self.device
+                .reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty())
+                .unwrap()
+        }
 
         //The command buffer is submitted only once to the GPU
-        let cmd_begin_info = vk_init::command_buffer_begin_info(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        let cmd_begin_info =
+            vk_init::command_buffer_begin_info(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+        //set extent for draw image
+        self.draw_extent = vk::Extent2D {width : self.draw_image.image_extent.width, height : self.draw_image.image_extent.height};
 
         //Begin the command buffer for instruction submmission
-        unsafe {self.device.begin_command_buffer(cmd, &cmd_begin_info).unwrap()}
+        unsafe {
+            self.device
+                .begin_command_buffer(cmd, &cmd_begin_info)
+                .unwrap()
+        }
 
-        //make the swapchain image into writeable mode before rendering
-        vk_images::transition_image(&self.device, cmd, self.swapchain_images[swapchain_image_index], vk::ImageLayout::UNDEFINED, vk::ImageLayout::GENERAL);
+        // transition our main draw image into general layout so we can write into it
+        // we will overwrite it all so we dont care about what was the older layout
+        vk_images::transition_image(
+            &self.device,
+            cmd,
+            self.draw_image.image,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::GENERAL,
+        );
 
-        //make a clear-color from frame number. This will flash with a 120 frame period.
-        let flash = (self.frame_number as f32/ 120f32).sin().abs();
-        let clear_value = vk::ClearColorValue{float32 : [0f32, 0f32, flash, 1f32]};
+       self.draw_background(cmd);
 
-        let clear_range = vk_init::image_subresource_range(vk::ImageAspectFlags::COLOR);
+        //transition the draw image and the swapchain image into their correct transfer layouts
 
-        //clear image
-        unsafe {self.device.cmd_clear_color_image(cmd, self.swapchain_images[swapchain_image_index], vk::ImageLayout::GENERAL, &clear_value, slice::from_ref(&clear_range))};
+        //set the draw image to be the source of a copy command
+        vk_images::transition_image(
+            &self.device,
+            cmd,
+            self.draw_image.image,
+            vk::ImageLayout::GENERAL,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        );
+        //Set the swapchain image to be the destination of the same copy command
+        vk_images::transition_image(
+            &self.device,
+            cmd,
+            self.swapchain_images[swapchain_image_index as usize],
+            vk::ImageLayout::GENERAL,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        );
 
-        //make the swapchain image into presentable mode
-        vk_images::transition_image(&self.device, cmd, self.swapchain_images[swapchain_image_index], vk::ImageLayout::GENERAL, vk::ImageLayout::PRESENT_SRC_KHR);
+        //submit copy from draw image to the current swapchain image to the command buffer
+        vk_images::copy_image_to_image(&self.device, cmd, self.draw_image.image, self.swapchain_images[swapchain_image_index as usize], self.draw_extent, self.swapchain_extent);
+
+        // set swapchain image layout to Present so we can show it on the screen
+        vk_images::transition_image(&self.device, cmd, self.swapchain_images[swapchain_image_index as usize], vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::PRESENT_SRC_KHR);
 
         //finalize the command buffer (we can no longer add commands, but it can now be executed)
-        unsafe {self.device.end_command_buffer(cmd).unwrap()};
+        unsafe { self.device.end_command_buffer(cmd).unwrap() };
 
         //prepare the submission to the queue.
         //we want to wait on the _presentSemaphore, as that semaphore is signaled when the swapchain is ready
         //we will signal the _renderSemaphore, to signal that rendering has finished
         let cmd_info = vk_init::command_buffer_submit_info(cmd);
 
-        let wait_info = vk_init::semaphore_submit_info(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT_KHR, self.get_current_frame().swapchain_semaphore);
-        let signal_info = vk_init::semaphore_submit_info(vk::PipelineStageFlags2::ALL_GRAPHICS, self.get_current_frame().render_semaphore);
+        let wait_info = vk_init::semaphore_submit_info(
+            vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT_KHR,
+            self.get_current_frame().swapchain_semaphore,
+        );
+        let signal_info = vk_init::semaphore_submit_info(
+            vk::PipelineStageFlags2::ALL_GRAPHICS,
+            self.get_current_frame().render_semaphore,
+        );
 
         let submit = vk_init::submit_info(&cmd_info, Some(&signal_info), Some(&wait_info));
 
         //submit command buffer to the queue and execute it.
         // render_fence will now block until the graphic commands finish execution
-        unsafe {self.device.queue_submit2(self.graphics_queue, slice::from_ref(&submit), self.get_current_frame().render_fence).unwrap()}
+        unsafe {
+            self.device
+                .queue_submit2(
+                    self.graphics_queue,
+                    slice::from_ref(&submit),
+                    self.get_current_frame().render_fence,
+                )
+                .unwrap()
+        }
 
+        //prepare present
+        // this will put the image we just rendered to into the visible window.
+        // we want to wait on the render_semaphore for that,
+        // as its necessary that drawing commands have finished before the image is displayed to the user
+        let present_info = vk::PresentInfoKHR::builder()
+            .swapchains(slice::from_ref(&self.swapchain))
+            .wait_semaphores(slice::from_ref(&self.get_current_frame().render_semaphore))
+            .image_indices(slice::from_ref(&swapchain_image_index))
+            .build();
+        unsafe {
+            self.swapchain_loader
+                .queue_present(self.graphics_queue, &present_info)
+                .unwrap()
+        };
+        self.frame_number += 1;
     }
 }
 
-impl Drop for VulkanEngine {
+impl<'a> Drop for VulkanEngine<'a> {
     fn drop(&mut self) {
-        if self.is_initialized{
-            unsafe {self.device.device_wait_idle().unwrap();}
+        if self.is_initialized {
+            unsafe {
+                self.device.device_wait_idle().unwrap();
+            }
+            //---------------------------- deallocations go here ------------------------------------------
 
-            for frame_data in self.frames.iter() {
-                unsafe {self.device.destroy_command_pool(frame_data.command_pool, None)};
+            /*for allocated_image in self.allocated_images.iter_mut() {
+                unsafe {allocated_image.dealloc(&self.device, &mut self.allocator)}
+            }*/
+
+            for frame_data in self.frames.iter_mut() {
+                unsafe {
+                    frame_data.dealloc_last_frame();
+                    self.device
+                        .destroy_command_pool(frame_data.command_pool, None);
+                    self.device.destroy_fence(frame_data.render_fence, None);
+                    self.device
+                        .destroy_semaphore(frame_data.render_semaphore, None);
+                    self.device
+                        .destroy_semaphore(frame_data.swapchain_semaphore, None);
+                };
             }
 
             self.destroy_swapchain();
@@ -210,10 +364,34 @@ impl Drop for VulkanEngine {
                 self.surface_loader.destroy_surface(self.surface, None);
                 self.device.destroy_device(None);
 
-                self.debug_utils_loader.destroy_debug_utils_messenger(self.debug_messenger, None);
+                self.debug_utils_loader
+                    .destroy_debug_utils_messenger(self.debug_messenger, None);
                 self.instance.destroy_instance(None);
-
             };
         }
+    }
+}
+
+//Draw commands for the background
+impl<'a> VulkanEngine<'a> {
+    fn draw_background(&self, cmd : vk::CommandBuffer){
+        //make a clear-color from frame number. This will flash with a 120 frame period.
+        let flash = (self.frame_number as f32 / 120f32).sin().abs();
+        let clear_value = vk::ClearColorValue {
+            float32: [0f32, 0f32, flash, 1f32],
+        };
+
+        let clear_range = vk_init::image_subresource_range(vk::ImageAspectFlags::COLOR);
+
+        //clear image
+        unsafe {
+            self.device.cmd_clear_color_image(
+                cmd,
+                self.draw_image.image,
+                vk::ImageLayout::GENERAL,
+                &clear_value,
+                slice::from_ref(&clear_range),
+            )
+        };
     }
 }

@@ -30,7 +30,7 @@ pub fn pick_physical_device_and_queue(
         None => {
             log::error!("Failed to find a suitable GPU!");
             panic!();
-            },
+        }
     }
 }
 
@@ -89,16 +89,18 @@ fn surface_supported(
             .get_physical_device_queue_family_properties(physical_device)
             .iter()
             .enumerate()
-            .find(|(queue_family_index, qfp): &(usize, &QueueFamilyProperties)| -> bool {
-                qfp.queue_flags.contains(vk::QueueFlags::GRAPHICS)
-                    && surface_loader
-                        .get_physical_device_surface_support(
-                            physical_device,
-                            *queue_family_index as u32,
-                            surface,
-                        )
-                        .unwrap()
-            })
+            .find(
+                |(queue_family_index, qfp): &(usize, &QueueFamilyProperties)| -> bool {
+                    qfp.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+                        && surface_loader
+                            .get_physical_device_surface_support(
+                                physical_device,
+                                *queue_family_index as u32,
+                                surface,
+                            )
+                            .unwrap()
+                },
+            )
             .unwrap()
             .0 as u32
     }
