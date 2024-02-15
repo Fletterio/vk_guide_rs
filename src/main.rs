@@ -1,9 +1,11 @@
 mod vk_bootstrap;
 mod vk_debug;
+mod vk_descriptors;
 mod vk_engine;
 mod vk_images;
 mod vk_init;
 mod vk_types;
+mod vk_pipelines;
 
 use vk_engine::VulkanEngine;
 

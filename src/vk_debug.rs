@@ -1,7 +1,10 @@
-use ash::vk;
-use std::borrow::Cow;
-use std::ffi::CStr;
-
+cfg_if::cfg_if! {
+    if #[cfg(debug_assertions)]{
+        use ash::vk;
+        use std::borrow::Cow;
+        use std::ffi::CStr;
+    }
+}
 #[cfg(debug_assertions)]
 pub unsafe extern "system" fn vulkan_debug_callback(
     message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,

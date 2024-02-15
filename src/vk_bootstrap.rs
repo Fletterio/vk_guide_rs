@@ -1,19 +1,22 @@
 mod device;
 
-use std::cell::{OnceCell};
 #[cfg(debug_assertions)]
 use crate::vk_debug::vulkan_debug_callback;
 use crate::vk_engine::frame_data::{FrameData, FRAME_OVERLAP};
 use crate::vk_init;
+use crate::vk_types::AllocatedImage;
 #[cfg(debug_assertions)]
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Swapchain};
 use ash::{vk, Device, Entry, Instance};
-use sdl2::video::Window;
-use std::ffi::{c_char, CString};
-use gpu_allocator::MemoryLocation;
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme};
-use crate::vk_types::AllocatedImage;
+use gpu_allocator::MemoryLocation;
+use sdl2::video::Window;
+use std::cell::OnceCell;
+use std::ffi::{c_char, CString};
+use ash::vk::PipelineCache;
+use crate::vk_descriptors::{DescriptorAllocator, DescriptorSetLayoutBuilder, PoolSizeRatio};
+use crate::vk_pipelines;
 
 //-----------------------------INSTANCE-------------------------------
 pub fn create_instance(entry: &Entry, window: &Window) -> Instance {
@@ -25,6 +28,7 @@ pub fn create_instance(entry: &Entry, window: &Window) -> Instance {
         .api_version(vk::make_api_version(0, 1, 3, 0))
         .build();
 
+    #[allow(unused_mut)]
     let mut extension_names: Vec<*const c_char> = window
         .vulkan_instance_extensions()
         .unwrap()
@@ -33,6 +37,7 @@ pub fn create_instance(entry: &Entry, window: &Window) -> Instance {
         .collect();
     #[cfg(debug_assertions)]
     extension_names.push(DebugUtils::name().as_ptr());
+    #[allow(unused_mut)]
     let mut instance_create_info = vk::InstanceCreateInfo::builder()
         .application_info(&app_info)
         .enabled_extension_names(&extension_names);
@@ -120,7 +125,7 @@ pub fn create_swapchain(
     surface_loader: &Surface,
     surface: vk::SurfaceKHR,
     extent: vk::Extent2D,
-    allocator : &mut gpu_allocator::vulkan::Allocator,
+    allocator: &mut gpu_allocator::vulkan::Allocator,
 ) -> (
     Swapchain,
     vk::SwapchainKHR,
@@ -128,7 +133,7 @@ pub fn create_swapchain(
     Vec<vk::Image>,
     Vec<vk::ImageView>,
     vk::Extent2D,
-    AllocatedImage
+    AllocatedImage,
 ) {
     let surface_format = vk::SurfaceFormatKHR {
         format: vk::Format::B8G8R8A8_UNORM,
@@ -205,40 +210,64 @@ pub fn create_swapchain(
         .collect();
 
     //draw Image stuff
-    let draw_image_extent = vk::Extent3D {width : extent.width, height : extent.height, depth : 1};
+    let draw_image_extent = vk::Extent3D {
+        width: extent.width,
+        height: extent.height,
+        depth: 1,
+    };
     //hardcoding the draw format to 32 bit float
     let draw_image_format = vk::Format::R16G16B16A16_SFLOAT;
-    let draw_image_usage_flags : vk::ImageUsageFlags = vk::ImageUsageFlags::TRANSFER_SRC
+    let draw_image_usage_flags: vk::ImageUsageFlags = vk::ImageUsageFlags::TRANSFER_SRC
         | vk::ImageUsageFlags::TRANSFER_DST
         | vk::ImageUsageFlags::STORAGE
         | vk::ImageUsageFlags::COLOR_ATTACHMENT;
-    let draw_image_create_info = vk_init::image_create_info(draw_image_format, draw_image_usage_flags, draw_image_extent);
-    let draw_image = unsafe {device.create_image(&draw_image_create_info, None).unwrap()};
-    let mut draw_image_requirements = unsafe {device.get_image_memory_requirements(draw_image)};
+    let draw_image_create_info =
+        vk_init::image_create_info(draw_image_format, draw_image_usage_flags, draw_image_extent);
+    let draw_image = unsafe { device.create_image(&draw_image_create_info, None).unwrap() };
+    let mut draw_image_requirements = unsafe { device.get_image_memory_requirements(draw_image) };
     //ensure memory is hosted on GPU VRAM. This is likely unnecessary
     draw_image_requirements.memory_type_bits |= vk::MemoryPropertyFlags::DEVICE_LOCAL.as_raw();
-    let draw_image_allocation : OnceCell<Allocation> = OnceCell::new();
-    draw_image_allocation.set(allocator.allocate(&AllocationCreateDesc {
-        name : "draw_image_allocation",
-        requirements : draw_image_requirements,
-        location : MemoryLocation::GpuOnly,
-        linear : false,
-        allocation_scheme : AllocationScheme::DedicatedImage(draw_image)
-    }).unwrap()).unwrap();
+    let draw_image_allocation: OnceCell<Allocation> = OnceCell::new();
+    draw_image_allocation
+        .set(
+            allocator
+                .allocate(&AllocationCreateDesc {
+                    name: "draw_image_allocation",
+                    requirements: draw_image_requirements,
+                    location: MemoryLocation::GpuOnly,
+                    linear: false,
+                    allocation_scheme: AllocationScheme::DedicatedImage(draw_image),
+                })
+                .unwrap(),
+        )
+        .unwrap();
     // Bind memory to the image
-    unsafe { device.bind_image_memory(draw_image, draw_image_allocation.get().unwrap().memory(), draw_image_allocation.get().unwrap().offset()).unwrap()};
+    unsafe {
+        device
+            .bind_image_memory(
+                draw_image,
+                draw_image_allocation.get().unwrap().memory(),
+                draw_image_allocation.get().unwrap().offset(),
+            )
+            .unwrap()
+    };
 
     //build a image-view for the draw image to use for rendering
-    let draw_image_view_create_info = vk_init::image_view_create_info(draw_image_format, draw_image, vk::ImageAspectFlags::COLOR);
-    let draw_image_view = unsafe {device.create_image_view(&draw_image_view_create_info, None).unwrap()};
+    let draw_image_view_create_info =
+        vk_init::image_view_create_info(draw_image_format, draw_image, vk::ImageAspectFlags::COLOR);
+    let draw_image_view = unsafe {
+        device
+            .create_image_view(&draw_image_view_create_info, None)
+            .unwrap()
+    };
 
     let allocated_image = AllocatedImage {
-        image : draw_image,
-        image_view : draw_image_view,
-        allocation : draw_image_allocation,
-        image_extent : draw_image_extent,
-        image_format : draw_image_format
-};
+        image: draw_image,
+        image_view: draw_image_view,
+        allocation: draw_image_allocation,
+        image_extent: draw_image_extent,
+        image_format: draw_image_format,
+    };
 
     (
         swapchain_loader,
@@ -321,4 +350,64 @@ fn init_sync_structures(
         .try_into()
         .unwrap();
     structures
+}
+
+pub fn init_descriptors(device: &Device, draw_image_view: vk::ImageView) -> (DescriptorAllocator, vk::DescriptorSet, vk::DescriptorSetLayout) {
+    let sizes = [PoolSizeRatio {descriptor_type: vk::DescriptorType::STORAGE_IMAGE, ratio: 1.0f32}];
+
+    let mut global_descriptor_allocator = DescriptorAllocator::default();
+    global_descriptor_allocator.init_pool(device, 10, &sizes);
+
+    let mut dsl_builder = DescriptorSetLayoutBuilder {bindings: Vec::new()};
+    dsl_builder.add_binding(0, vk::DescriptorType::STORAGE_IMAGE);
+    let draw_image_descriptor_layout = dsl_builder.build(device, vk::ShaderStageFlags::COMPUTE);
+
+    let draw_image_descriptors = global_descriptor_allocator.allocate(device, draw_image_descriptor_layout);
+
+    let img_info = vk::DescriptorImageInfo::builder()
+        .image_layout(vk::ImageLayout::GENERAL)
+        .image_view(draw_image_view)
+        .build();
+
+    let draw_image_write = vk::WriteDescriptorSet::builder()
+        .dst_binding(0)
+        .dst_set(draw_image_descriptors)
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+        .image_info(std::slice::from_ref(&img_info))
+        .build();
+
+    unsafe {device.update_descriptor_sets(std::slice::from_ref(&draw_image_write), &[])};
+
+    (global_descriptor_allocator, draw_image_descriptors, draw_image_descriptor_layout)
+}
+
+pub fn init_background_pipelines(device: &Device, descriptor_set_layout: vk::DescriptorSetLayout) -> (vk::Pipeline, vk::PipelineLayout) {
+    let compute_pipeline_layout = vk::PipelineLayoutCreateInfo::builder()
+        .set_layouts(std::slice::from_ref(&descriptor_set_layout))
+        .build();
+    let gradient_pipeline_layout = unsafe {device.create_pipeline_layout(&compute_pipeline_layout, None).unwrap()};
+
+    let compute_draw_shader = vk_pipelines::load_shader_module("./shaders/gradient_comp.spv", device);
+
+    let name = CString::new("main").unwrap();
+    let stage_info = vk::PipelineShaderStageCreateInfo::builder()
+        .stage(vk::ShaderStageFlags::COMPUTE)
+        .module(compute_draw_shader)
+        .name(&name)
+        .build();
+
+    let compute_pipeline_create_info = vk::ComputePipelineCreateInfo::builder()
+        .layout(gradient_pipeline_layout)
+        .stage(stage_info)
+        .build();
+
+    let gradient_pipeline = unsafe {device.create_compute_pipelines(PipelineCache::null(), std::slice::from_ref(&compute_pipeline_create_info), None).unwrap()[0]};
+
+    //clean up shader module since it's not needed after pipeline creation
+    unsafe {device.destroy_shader_module(compute_draw_shader, None)};
+
+    (gradient_pipeline, gradient_pipeline_layout)
+}
+pub fn init_pipelines(device: &Device, descriptor_set_layout: vk::DescriptorSetLayout) -> (vk::Pipeline, vk::PipelineLayout) {
+    init_background_pipelines(device, descriptor_set_layout)
 }

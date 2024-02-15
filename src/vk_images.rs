@@ -1,7 +1,7 @@
 use crate::vk_init;
+use ash::vk::{ImageSubresourceLayers, Offset3D};
 use ash::{vk, Device};
 use std::slice;
-use ash::vk::{ImageSubresourceLayers, Offset3D};
 
 //using sync2 pipeline barrier to transition image layouts
 pub fn transition_image(
@@ -35,22 +35,47 @@ pub fn transition_image(
     unsafe { device.cmd_pipeline_barrier2(cmd, &dependency_info) };
 }
 
-pub fn copy_image_to_image(device : &Device, cmd: vk::CommandBuffer, source: vk::Image, destination: vk::Image, src_size: vk::Extent2D, dst_size: vk::Extent2D) {
+pub fn copy_image_to_image(
+    device: &Device,
+    cmd: vk::CommandBuffer,
+    source: vk::Image,
+    destination: vk::Image,
+    src_size: vk::Extent2D,
+    dst_size: vk::Extent2D,
+) {
     let blit_region = vk::ImageBlit2::builder()
-        .src_offsets([Default::default(), Offset3D{x : src_size.width as i32, y : src_size.height as i32, z : 1}])
-        .dst_offsets([Default::default(), Offset3D{x : dst_size.width as i32, y : dst_size.height as i32, z : 1}])
-        .src_subresource(ImageSubresourceLayers::builder()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .base_array_layer(0)
-            .layer_count(1)
-            .mip_level(0)
-            .build())
-        .dst_subresource(ImageSubresourceLayers::builder()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .base_array_layer(0)
-            .layer_count(1)
-            .mip_level(0)
-            .build())
+        .src_offsets([
+            Default::default(),
+            Offset3D {
+                x: src_size.width as i32,
+                y: src_size.height as i32,
+                z: 1,
+            },
+        ])
+        .dst_offsets([
+            Default::default(),
+            Offset3D {
+                x: dst_size.width as i32,
+                y: dst_size.height as i32,
+                z: 1,
+            },
+        ])
+        .src_subresource(
+            ImageSubresourceLayers::builder()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_array_layer(0)
+                .layer_count(1)
+                .mip_level(0)
+                .build(),
+        )
+        .dst_subresource(
+            ImageSubresourceLayers::builder()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_array_layer(0)
+                .layer_count(1)
+                .mip_level(0)
+                .build(),
+        )
         .build();
 
     let blit_info = vk::BlitImageInfo2::builder()
@@ -62,5 +87,5 @@ pub fn copy_image_to_image(device : &Device, cmd: vk::CommandBuffer, source: vk:
         .regions(slice::from_ref(&blit_region))
         .build();
 
-    unsafe {device.cmd_blit_image2(cmd, &blit_info)};
+    unsafe { device.cmd_blit_image2(cmd, &blit_info) };
 }

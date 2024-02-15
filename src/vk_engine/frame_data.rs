@@ -1,4 +1,4 @@
-use crate::vk_engine::{VulkanEngine};
+use crate::vk_engine::VulkanEngine;
 use ash::vk;
 use std::fmt::Formatter;
 
@@ -22,9 +22,7 @@ impl<'a> VulkanEngine<'a> {
 }
 
 impl FrameData {
-    pub unsafe fn dealloc_last_frame(&mut self) {
-
-    }
+    pub unsafe fn dealloc_last_frame(&mut self) {}
 }
 
 //Necessary to be able to collect vector in array, somehow

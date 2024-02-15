@@ -1,5 +1,5 @@
+use ash::{vk, Device};
 use std::cell::OnceCell;
-use ash::{Device, vk};
 
 pub struct AllocatedImage {
     pub image: vk::Image,
@@ -10,9 +10,13 @@ pub struct AllocatedImage {
 }
 
 impl AllocatedImage {
-    pub unsafe fn dealloc(&mut self, device : &Device, allocator : &mut gpu_allocator::vulkan::Allocator) {
-        unsafe {device.destroy_image_view(self.image_view, None)};
+    pub unsafe fn dealloc(
+        &mut self,
+        device: &Device,
+        allocator: &mut gpu_allocator::vulkan::Allocator,
+    ) {
+        unsafe { device.destroy_image_view(self.image_view, None) };
         allocator.free(self.allocation.take().unwrap()).unwrap();
-        unsafe {device.destroy_image(self.image, None)};
+        unsafe { device.destroy_image(self.image, None) };
     }
 }

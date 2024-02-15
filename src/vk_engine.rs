@@ -1,28 +1,30 @@
 pub mod destructors;
 pub mod frame_data;
 
-use std::marker::PhantomData;
 use crate::vk_bootstrap;
 use crate::vk_types::AllocatedImage;
 use crate::{vk_images, vk_init};
 use anyhow::Result;
+#[cfg(debug_assertions)]
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Swapchain};
-use ash::vk::{Handle};
+use ash::vk::Handle;
 use ash::{vk, Entry};
 pub use ash::{Device, Instance};
 use frame_data::{FrameData, FRAME_OVERLAP};
 use sdl2::event::{Event, WindowEvent};
 use sdl2::sys::VkInstance;
 use sdl2::EventPump;
+use std::marker::PhantomData;
 use std::slice;
+use crate::vk_descriptors::DescriptorAllocator;
 
 const WINDOW_TITLE: &'static str = "Vulkan Engine";
 const WINDOW_WIDTH: u32 = 1700;
 const WINDOW_HEIGHT: u32 = 900;
 
 pub struct VulkanEngine<'a> {
-    pub phantom : PhantomData<&'a u32>,
+    pub phantom: PhantomData<&'a u32>,
     pub is_initialized: bool,
     pub entry: Entry,
     pub frame_number: i32,
@@ -57,6 +59,13 @@ pub struct VulkanEngine<'a> {
     //draw resources
     pub draw_image: AllocatedImage,
     pub draw_extent: vk::Extent2D,
+    //descriptor stuff
+    pub global_descriptor_allocator: DescriptorAllocator,
+    pub draw_image_descriptors: vk::DescriptorSet,
+    pub draw_image_descriptor_layout: vk::DescriptorSetLayout,
+    //Pipelines
+    pub gradient_pipeline: vk::Pipeline,
+    pub gradient_pipeline_layout: vk::PipelineLayout
 }
 
 // Main loop functions
@@ -113,9 +122,9 @@ impl<'a> VulkanEngine<'a> {
         let mut allocator = gpu_allocator::vulkan::Allocator::new(&allocator_create_info).unwrap();
         //let mut allocated_images : Vec<&mut AllocatedImage> = Vec::new();
         //re-move for simplicity
-        let instance= allocator_create_info.instance;
+        let instance = allocator_create_info.instance;
         let device = allocator_create_info.device;
-        let physical_device= allocator_create_info.physical_device;
+        let physical_device = allocator_create_info.physical_device;
         //Swapchain creation
         let (
             swapchain_loader,
@@ -124,7 +133,7 @@ impl<'a> VulkanEngine<'a> {
             swapchain_images,
             swapchain_image_views,
             swapchain_extent,
-            draw_image
+            draw_image,
         ) = vk_bootstrap::create_swapchain(
             &instance,
             &device,
@@ -134,6 +143,9 @@ impl<'a> VulkanEngine<'a> {
             window_extent,
             &mut allocator,
         );
+        let (global_descriptor_allocator, draw_image_descriptors, draw_image_descriptor_layout) = vk_bootstrap::init_descriptors(&device, draw_image.image_view);
+
+        let (gradient_pipeline, gradient_pipeline_layout) = vk_bootstrap::init_pipelines(&device, draw_image_descriptor_layout);
         //No need to add to deletion queue, drop method takes care of it
         Ok(VulkanEngine {
             phantom: PhantomData,
@@ -164,7 +176,12 @@ impl<'a> VulkanEngine<'a> {
             graphics_queue_family,
             allocator,
             draw_image,
-            draw_extent : Default::default()
+            draw_extent: window_extent,
+            global_descriptor_allocator,
+            draw_image_descriptors,
+            draw_image_descriptor_layout,
+            gradient_pipeline,
+            gradient_pipeline_layout
         })
     }
     pub fn run(&mut self) {
@@ -206,7 +223,9 @@ impl<'a> VulkanEngine<'a> {
                 .unwrap()
         }
         //delete all objects crated for last draw
-        unsafe {self.get_current_frame_mut().dealloc_last_frame();}
+        unsafe {
+            self.get_current_frame_mut().dealloc_last_frame();
+        }
 
         unsafe {
             self.device
@@ -238,7 +257,10 @@ impl<'a> VulkanEngine<'a> {
             vk_init::command_buffer_begin_info(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
         //set extent for draw image
-        self.draw_extent = vk::Extent2D {width : self.draw_image.image_extent.width, height : self.draw_image.image_extent.height};
+        self.draw_extent = vk::Extent2D {
+            width: self.draw_image.image_extent.width,
+            height: self.draw_image.image_extent.height,
+        };
 
         //Begin the command buffer for instruction submmission
         unsafe {
@@ -257,7 +279,7 @@ impl<'a> VulkanEngine<'a> {
             vk::ImageLayout::GENERAL,
         );
 
-       self.draw_background(cmd);
+        self.draw_background(cmd);
 
         //transition the draw image and the swapchain image into their correct transfer layouts
 
@@ -274,15 +296,28 @@ impl<'a> VulkanEngine<'a> {
             &self.device,
             cmd,
             self.swapchain_images[swapchain_image_index as usize],
-            vk::ImageLayout::GENERAL,
+            vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         );
 
         //submit copy from draw image to the current swapchain image to the command buffer
-        vk_images::copy_image_to_image(&self.device, cmd, self.draw_image.image, self.swapchain_images[swapchain_image_index as usize], self.draw_extent, self.swapchain_extent);
+        vk_images::copy_image_to_image(
+            &self.device,
+            cmd,
+            self.draw_image.image,
+            self.swapchain_images[swapchain_image_index as usize],
+            self.draw_extent,
+            self.swapchain_extent,
+        );
 
         // set swapchain image layout to Present so we can show it on the screen
-        vk_images::transition_image(&self.device, cmd, self.swapchain_images[swapchain_image_index as usize], vk::ImageLayout::TRANSFER_DST_OPTIMAL, vk::ImageLayout::PRESENT_SRC_KHR);
+        vk_images::transition_image(
+            &self.device,
+            cmd,
+            self.swapchain_images[swapchain_image_index as usize],
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::PRESENT_SRC_KHR,
+        );
 
         //finalize the command buffer (we can no longer add commands, but it can now be executed)
         unsafe { self.device.end_command_buffer(cmd).unwrap() };
@@ -341,6 +376,11 @@ impl<'a> Drop for VulkanEngine<'a> {
             }
             //---------------------------- deallocations go here ------------------------------------------
 
+            self.destroy_pipelines();
+
+            //destroy descriptor sets and their layouts
+            self.destroy_descriptor_sets();
+
             /*for allocated_image in self.allocated_images.iter_mut() {
                 unsafe {allocated_image.dealloc(&self.device, &mut self.allocator)}
             }*/
@@ -363,7 +403,7 @@ impl<'a> Drop for VulkanEngine<'a> {
             unsafe {
                 self.surface_loader.destroy_surface(self.surface, None);
                 self.device.destroy_device(None);
-
+                #[cfg(debug_assertions)]
                 self.debug_utils_loader
                     .destroy_debug_utils_messenger(self.debug_messenger, None);
                 self.instance.destroy_instance(None);
@@ -374,24 +414,11 @@ impl<'a> Drop for VulkanEngine<'a> {
 
 //Draw commands for the background
 impl<'a> VulkanEngine<'a> {
-    fn draw_background(&self, cmd : vk::CommandBuffer){
-        //make a clear-color from frame number. This will flash with a 120 frame period.
-        let flash = (self.frame_number as f32 / 120f32).sin().abs();
-        let clear_value = vk::ClearColorValue {
-            float32: [0f32, 0f32, flash, 1f32],
-        };
-
-        let clear_range = vk_init::image_subresource_range(vk::ImageAspectFlags::COLOR);
-
-        //clear image
+    fn draw_background(&self, cmd: vk::CommandBuffer) {
         unsafe {
-            self.device.cmd_clear_color_image(
-                cmd,
-                self.draw_image.image,
-                vk::ImageLayout::GENERAL,
-                &clear_value,
-                slice::from_ref(&clear_range),
-            )
-        };
+            self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, self.gradient_pipeline);
+            self.device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::COMPUTE, self.gradient_pipeline_layout, 0, slice::from_ref(&self.draw_image_descriptors), &[]);
+            self.device.cmd_dispatch(cmd, (self.draw_extent.width as f32 / 16f32).ceil() as u32, (self.draw_extent.height as f32 / 16f32).ceil() as u32, 1);
+        }
     }
 }
