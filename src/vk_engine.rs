@@ -1,6 +1,8 @@
-pub mod destructors;
+mod destructors;
 pub mod frame_data;
+mod immediate;
 
+use std::cell::OnceCell;
 use crate::vk_bootstrap;
 use crate::vk_types::AllocatedImage;
 use crate::{vk_images, vk_init};
@@ -17,7 +19,9 @@ use sdl2::sys::VkInstance;
 use sdl2::EventPump;
 use std::marker::PhantomData;
 use std::slice;
+use gpu_allocator::{AllocationSizes, AllocatorDebugSettings};
 use crate::vk_descriptors::DescriptorAllocator;
+use imgui_sdl2;
 
 const WINDOW_TITLE: &'static str = "Vulkan Engine";
 const WINDOW_WIDTH: u32 = 1700;
@@ -65,7 +69,16 @@ pub struct VulkanEngine<'a> {
     pub draw_image_descriptor_layout: vk::DescriptorSetLayout,
     //Pipelines
     pub gradient_pipeline: vk::Pipeline,
-    pub gradient_pipeline_layout: vk::PipelineLayout
+    pub gradient_pipeline_layout: vk::PipelineLayout,
+    //ImGUI stuff - Immediate
+    pub immediate_fence: vk::Fence,
+    pub immediate_command_pool: vk::CommandPool,
+    pub immediate_command_buffer : vk::CommandBuffer,
+    //ImGUI specific structs
+    pub imgui_context: imgui::Context,
+    pub imgui_sdl2: imgui_sdl2::ImguiSdl2,
+    pub imgui_pool: vk::DescriptorPool,
+    pub renderer: OnceCell<imgui_rs_vulkan_renderer::Renderer>,
 }
 
 // Main loop functions
@@ -108,23 +121,18 @@ impl<'a> VulkanEngine<'a> {
         //Event pump
         let event_pump = sdl_context.event_pump().unwrap();
         //FrameData creation
-        let frames = vk_bootstrap::init_frames(&device, graphics_queue_family);
+        let (frames, immediate_command_pool, immediate_command_buffer, immediate_fence) = vk_bootstrap::init_frames(&device, graphics_queue_family);
 
         //Allocator creation
         let allocator_create_info = gpu_allocator::vulkan::AllocatorCreateDesc {
-            instance,
-            device,
+            instance: instance.clone(),
+            device: device.clone(),
             physical_device,
-            debug_settings: Default::default(),
+            debug_settings: AllocatorDebugSettings::default(),
             buffer_device_address: true,
-            allocation_sizes: Default::default(),
+            allocation_sizes: AllocationSizes::default(),
         };
         let mut allocator = gpu_allocator::vulkan::Allocator::new(&allocator_create_info).unwrap();
-        //let mut allocated_images : Vec<&mut AllocatedImage> = Vec::new();
-        //re-move for simplicity
-        let instance = allocator_create_info.instance;
-        let device = allocator_create_info.device;
-        let physical_device = allocator_create_info.physical_device;
         //Swapchain creation
         let (
             swapchain_loader,
@@ -144,9 +152,9 @@ impl<'a> VulkanEngine<'a> {
             &mut allocator,
         );
         let (global_descriptor_allocator, draw_image_descriptors, draw_image_descriptor_layout) = vk_bootstrap::init_descriptors(&device, draw_image.image_view);
-
         let (gradient_pipeline, gradient_pipeline_layout) = vk_bootstrap::init_pipelines(&device, draw_image_descriptor_layout);
         //No need to add to deletion queue, drop method takes care of it
+        let (imgui_context, imgui_sdl2, imgui_pool, renderer) = immediate::init_imgui(&instance, &device, physical_device, graphics_queue, immediate_command_pool, swapchain_image_format.format, &window);
         Ok(VulkanEngine {
             phantom: PhantomData,
             is_initialized: true,
@@ -181,7 +189,14 @@ impl<'a> VulkanEngine<'a> {
             draw_image_descriptors,
             draw_image_descriptor_layout,
             gradient_pipeline,
-            gradient_pipeline_layout
+            gradient_pipeline_layout,
+            immediate_fence,
+            immediate_command_pool,
+            immediate_command_buffer,
+            imgui_context,
+            imgui_sdl2,
+            imgui_pool,
+            renderer: renderer.into()
         })
     }
     pub fn run(&mut self) {
@@ -190,6 +205,8 @@ impl<'a> VulkanEngine<'a> {
         while !b_quit {
             // Handle events on queue
             for event in self.event_pump.poll_iter() {
+                self.imgui_sdl2.handle_event(&mut self.imgui_context, &event);
+                if self.imgui_sdl2.ignore_event(&event) { continue; }
                 match event {
                     Event::Quit { .. } => {
                         b_quit = true;
@@ -209,6 +226,15 @@ impl<'a> VulkanEngine<'a> {
                 std::thread::sleep(std::time::Duration::from_millis(10));
                 continue;
             }
+            //must be called before imgui.frame()
+            self.imgui_sdl2.prepare_frame(self.imgui_context.io_mut(), &self.window, &self.event_pump.mouse_state());
+            let ui = self.imgui_context.new_frame();
+            //call this immediately before UI rendering code
+            self.imgui_sdl2.prepare_render(&ui, &self.window);
+            //UI rendering code
+            //------------------
+
+            self.imgui_context.render();
             self.draw();
         }
     }
@@ -291,6 +317,7 @@ impl<'a> VulkanEngine<'a> {
             vk::ImageLayout::GENERAL,
             vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
         );
+
         //Set the swapchain image to be the destination of the same copy command
         vk_images::transition_image(
             &self.device,
@@ -310,12 +337,30 @@ impl<'a> VulkanEngine<'a> {
             self.swapchain_extent,
         );
 
-        // set swapchain image layout to Present so we can show it on the screen
+        // set swapchain image layout to color attachment so we can show draw on it
         vk_images::transition_image(
             &self.device,
             cmd,
             self.swapchain_images[swapchain_image_index as usize],
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        );
+
+        //careful about this code: the only reason we don't need to sync is because transitioning images is currently
+        //written as to block all the pipeline
+        unsafe {self.device.begin_command_buffer(self.immediate_command_buffer, &cmd_begin_info).unwrap()};
+
+        //draw ImGUI directly into swapchain image
+        self.draw_imgui(self.swapchain_image_views[swapchain_image_index as usize]);
+
+        unsafe {self.device.end_command_buffer(self.immediate_command_buffer).unwrap()};
+
+        //transition swapchain image to a presentable layout
+        vk_images::transition_image(
+            &self.device,
+            cmd,
+            self.swapchain_images[swapchain_image_index as usize],
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
             vk::ImageLayout::PRESENT_SRC_KHR,
         );
 
@@ -376,6 +421,11 @@ impl<'a> Drop for VulkanEngine<'a> {
             }
             //---------------------------- deallocations go here ------------------------------------------
 
+            //Renderer must be destroyed early, because it needs access to the device
+            self.renderer.take();
+
+            self.destroy_immediate_handles();
+
             self.destroy_pipelines();
 
             //destroy descriptor sets and their layouts
@@ -385,21 +435,11 @@ impl<'a> Drop for VulkanEngine<'a> {
                 unsafe {allocated_image.dealloc(&self.device, &mut self.allocator)}
             }*/
 
-            for frame_data in self.frames.iter_mut() {
-                unsafe {
-                    frame_data.dealloc_last_frame();
-                    self.device
-                        .destroy_command_pool(frame_data.command_pool, None);
-                    self.device.destroy_fence(frame_data.render_fence, None);
-                    self.device
-                        .destroy_semaphore(frame_data.render_semaphore, None);
-                    self.device
-                        .destroy_semaphore(frame_data.swapchain_semaphore, None);
-                };
-            }
+            self.destroy_frame_data();
 
             self.destroy_swapchain();
 
+            //final cleanup
             unsafe {
                 self.surface_loader.destroy_surface(self.surface, None);
                 self.device.destroy_device(None);
@@ -412,7 +452,7 @@ impl<'a> Drop for VulkanEngine<'a> {
     }
 }
 
-//Draw commands for the background
+//Draw commands
 impl<'a> VulkanEngine<'a> {
     fn draw_background(&self, cmd: vk::CommandBuffer) {
         unsafe {
@@ -420,5 +460,17 @@ impl<'a> VulkanEngine<'a> {
             self.device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::COMPUTE, self.gradient_pipeline_layout, 0, slice::from_ref(&self.draw_image_descriptors), &[]);
             self.device.cmd_dispatch(cmd, (self.draw_extent.width as f32 / 16f32).ceil() as u32, (self.draw_extent.height as f32 / 16f32).ceil() as u32, 1);
         }
+    }
+
+    fn draw_imgui(&mut self, target_image_view: vk::ImageView) {
+        let color_attachment = vk_init::attachment_info(target_image_view, None, vk::ImageLayout::GENERAL);
+        let render_info = vk_init::rendering_info(self.swapchain_extent, color_attachment, None);
+
+        unsafe {self.device.cmd_begin_rendering(self.immediate_command_buffer, &render_info)};
+
+        self.renderer.get_mut().unwrap().cmd_draw(self.immediate_command_buffer, self.imgui_context.render()).unwrap();
+
+        unsafe {self.device.cmd_end_rendering(self.immediate_command_buffer)};
+
     }
 }

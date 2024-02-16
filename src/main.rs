@@ -1,3 +1,5 @@
+extern crate core;
+
 mod vk_bootstrap;
 mod vk_debug;
 mod vk_descriptors;

@@ -280,9 +280,9 @@ pub fn create_swapchain(
     )
 }
 
-pub fn init_frames(device: &Device, graphics_queue_family: u32) -> [FrameData; FRAME_OVERLAP] {
-    let command_stuff = init_commands(device, graphics_queue_family);
-    let sync_structures = init_sync_structures(device);
+pub fn init_frames(device: &Device, graphics_queue_family: u32) -> ([FrameData; FRAME_OVERLAP], vk::CommandPool, vk::CommandBuffer, vk::Fence) {
+    let (command_stuff, immediate_pool, immediate_buffer) = init_commands(device, graphics_queue_family);
+    let (sync_structures, immediate_fence) = init_sync_structures(device);
     let frames = <[FrameData; FRAME_OVERLAP]>::try_from(
         (0..FRAME_OVERLAP)
             .map(|frame| -> FrameData {
@@ -296,13 +296,13 @@ pub fn init_frames(device: &Device, graphics_queue_family: u32) -> [FrameData; F
             })
             .collect::<Vec<FrameData>>(),
     );
-    frames.expect("Error - weird error going from vec to array")
+    (frames.expect("Error - weird error going from vec to array"), immediate_pool, immediate_buffer, immediate_fence)
 }
 
 fn init_commands(
     device: &Device,
     graphics_queue_family: u32,
-) -> [(vk::CommandPool, vk::CommandBuffer); FRAME_OVERLAP] {
+) -> ([(vk::CommandPool, vk::CommandBuffer); FRAME_OVERLAP], vk::CommandPool, vk::CommandBuffer) { //array is for each frame, last two are immediate
     let command_pool_info = vk_init::command_pool_create_info(
         graphics_queue_family,
         vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
@@ -322,12 +322,17 @@ fn init_commands(
         .collect::<Vec<(vk::CommandPool, vk::CommandBuffer)>>()
         .try_into()
         .unwrap();
-    commands
+
+    //immediate ones
+    let immediate_command_pool = unsafe {device.create_command_pool(&command_pool_info, None).unwrap()};
+    let immediate_cmd_alloc_info = vk_init::command_buffer_allocate_info(immediate_command_pool, 1);
+    let immediate_command_buffer = unsafe {device.allocate_command_buffers(&immediate_cmd_alloc_info).unwrap()[0]};
+    (commands, immediate_command_pool, immediate_command_buffer)
 }
 
 fn init_sync_structures(
     device: &Device,
-) -> [(vk::Semaphore, vk::Semaphore, vk::Fence); FRAME_OVERLAP] {
+) -> ([(vk::Semaphore, vk::Semaphore, vk::Fence); FRAME_OVERLAP], vk::Fence) { //last fence is for immediate
     let fence_create_info = vk_init::fence_create_info(vk::FenceCreateFlags::SIGNALED);
     let semaphore_create_info = vk_init::semaphore_create_info(vk::SemaphoreCreateFlags::empty());
 
@@ -349,7 +354,10 @@ fn init_sync_structures(
         .collect::<Vec<(vk::Semaphore, vk::Semaphore, vk::Fence)>>()
         .try_into()
         .unwrap();
-    structures
+    //immediate fence
+    let immediate_fence = unsafe {device.create_fence(&fence_create_info, None).unwrap()};
+
+    (structures, immediate_fence)
 }
 
 pub fn init_descriptors(device: &Device, draw_image_view: vk::ImageView) -> (DescriptorAllocator, vk::DescriptorSet, vk::DescriptorSetLayout) {

@@ -45,7 +45,7 @@ pub fn copy_image_to_image(
 ) {
     let blit_region = vk::ImageBlit2::builder()
         .src_offsets([
-            Default::default(),
+            Offset3D::default(),
             Offset3D {
                 x: src_size.width as i32,
                 y: src_size.height as i32,
@@ -53,7 +53,7 @@ pub fn copy_image_to_image(
             },
         ])
         .dst_offsets([
-            Default::default(),
+            Offset3D::default(),
             Offset3D {
                 x: dst_size.width as i32,
                 y: dst_size.height as i32,

@@ -31,7 +31,7 @@ impl DescriptorSetLayoutBuilder {
         }
         let info = vk::DescriptorSetLayoutCreateInfo::builder()
             .bindings(&self.bindings)
-            .flags(Default::default())
+            .flags(vk::DescriptorSetLayoutCreateFlags::empty())
             .build();
         unsafe { device.create_descriptor_set_layout(&info, None).unwrap() }
     }
@@ -58,7 +58,7 @@ impl DescriptorAllocator {
             );
         }
         let pool_info = vk::DescriptorPoolCreateInfo::builder()
-            .flags(Default::default())
+            .flags(vk::DescriptorPoolCreateFlags::empty())
             .max_sets(max_sets)
             .pool_sizes(&pool_sizes)
             .build();
@@ -68,7 +68,7 @@ impl DescriptorAllocator {
 
     #[allow(dead_code)]
     pub fn clear_descriptors(&mut self, device: &Device) {
-        unsafe {device.reset_descriptor_pool(self.pool, Default::default()).unwrap()};
+        unsafe {device.reset_descriptor_pool(self.pool, vk::DescriptorPoolResetFlags::empty()).unwrap()};
     }
 
     #[allow(dead_code)]

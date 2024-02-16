@@ -24,4 +24,25 @@ impl<'a> VulkanEngine<'a> {
         unsafe {self.device.destroy_descriptor_set_layout(self.draw_image_descriptor_layout, None)};
         unsafe {self.device.destroy_descriptor_pool(self.global_descriptor_allocator.pool, None)};
     }
+
+    pub fn destroy_frame_data(&mut self) {
+        for frame_data in self.frames.iter_mut() {
+            unsafe {
+                frame_data.dealloc_last_frame();
+                self.device
+                    .destroy_command_pool(frame_data.command_pool, None);
+                self.device.destroy_fence(frame_data.render_fence, None);
+                self.device
+                    .destroy_semaphore(frame_data.render_semaphore, None);
+                self.device
+                    .destroy_semaphore(frame_data.swapchain_semaphore, None);
+            };
+        }
+    }
+
+    pub fn destroy_immediate_handles(&mut self) {
+        unsafe {self.device.destroy_fence(self.immediate_fence, None);}
+        unsafe {self.device.destroy_command_pool(self.immediate_command_pool, None)};
+        unsafe {self.device.destroy_descriptor_pool(self.imgui_pool, None)};
+    }
 }

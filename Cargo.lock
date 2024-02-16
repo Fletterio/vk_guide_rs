@@ -287,10 +287,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d660c31fa86a84eb170f98d44f78ccb13d47213130b1bade922cbcaf180c8efd"
 dependencies = [
  "ash",
+ "gpu-allocator",
  "imgui",
  "log",
  "thiserror",
  "ultraviolet",
+]
+
+[[package]]
+name = "imgui-sdl2"
+version = "0.15.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd217b5cc76057cd516a3c0ecbdccd1127f1d45990645be2e55e88cc8512483c"
+dependencies = [
+ "imgui",
+ "sdl2",
 ]
 
 [[package]]
@@ -740,6 +751,7 @@ dependencies = [
  "gpu-allocator",
  "imgui",
  "imgui-rs-vulkan-renderer",
+ "imgui-sdl2",
  "log",
  "pretty_env_logger",
  "raw-window-handle 0.6.0",
@@ -757,9 +769,9 @@ checksum = "9c8d87e72b64a3b4db28d11ce29237c246188f4f51057d65a7eab63b7987e423"
 
 [[package]]
 name = "wide"
-version = "0.7.14"
+version = "0.7.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b31891d644eba1789fb6715f27fbc322e4bdf2ecdc412ede1993246159271613"
+checksum = "89beec544f246e679fc25490e3f8e08003bc4bf612068f325120dad4cea02c1c"
 dependencies = [
  "bytemuck",
  "safe_arch",
