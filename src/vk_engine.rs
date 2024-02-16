@@ -229,16 +229,16 @@ impl<'a> VulkanEngine<'a> {
             //must be called before imgui.frame()
             self.imgui_sdl2.prepare_frame(self.imgui_context.io_mut(), &self.window, &self.event_pump.mouse_state());
             let ui = self.imgui_context.new_frame();
-            //call this immediately before UI rendering code
-            self.imgui_sdl2.prepare_render(&ui, &self.window);
             //UI rendering code
-            //------------------
+            ui.show_demo_window(&mut true);
+            //call this immediately before rendering
+            self.imgui_sdl2.prepare_render(&ui, &self.window);
 
             self.imgui_context.render();
             self.draw();
         }
     }
-    pub fn draw(&mut self) {
+    pub fn draw(&self) {
         unsafe {
             self.device
                 .wait_for_fences(
@@ -351,7 +351,9 @@ impl<'a> VulkanEngine<'a> {
         unsafe {self.device.begin_command_buffer(self.immediate_command_buffer, &cmd_begin_info).unwrap()};
 
         //draw ImGUI directly into swapchain image
-        self.draw_imgui(self.swapchain_image_views[swapchain_image_index as usize]);
+        self.immediate_submit(|cmd| {
+           self.draw_imgui(cmd, self.swapchain_image_views[swapchain_image_index as usize]);
+        });
 
         unsafe {self.device.end_command_buffer(self.immediate_command_buffer).unwrap()};
 
@@ -462,7 +464,7 @@ impl<'a> VulkanEngine<'a> {
         }
     }
 
-    fn draw_imgui(&mut self, target_image_view: vk::ImageView) {
+    fn draw_imgui(&mut self, cmd: vk::CommandBuffer, target_image_view: vk::ImageView) {
         let color_attachment = vk_init::attachment_info(target_image_view, None, vk::ImageLayout::GENERAL);
         let render_info = vk_init::rendering_info(self.swapchain_extent, color_attachment, None);
 

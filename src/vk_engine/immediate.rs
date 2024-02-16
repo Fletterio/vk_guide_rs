@@ -7,7 +7,7 @@ use imgui_rs_vulkan_renderer::{DynamicRendering, Options, Renderer};
 use crate::{vk_engine, vk_init, VulkanEngine};
 impl<'a> VulkanEngine<'a> {
     #[allow(dead_code)]
-    pub fn immediate_submit<Callback: Fn(vk::CommandBuffer) + 'static>(&mut self, callback: Callback) {
+    pub fn immediate_submit<Callback: FnMut(vk::CommandBuffer) + 'a>(&self, callback: Callback) {
         unsafe {self.device.reset_fences(slice::from_ref(&self.immediate_fence)).unwrap()};
         unsafe {self.device.reset_command_buffer(self.immediate_command_buffer, vk::CommandBufferResetFlags::empty()).unwrap()};
 
