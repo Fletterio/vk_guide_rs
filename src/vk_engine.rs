@@ -238,7 +238,7 @@ impl<'a> VulkanEngine<'a> {
             self.draw();
         }
     }
-    pub fn draw(&self) {
+    pub fn draw(&mut self) {
         unsafe {
             self.device
                 .wait_for_fences(
@@ -345,17 +345,8 @@ impl<'a> VulkanEngine<'a> {
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
         );
-
-        //careful about this code: the only reason we don't need to sync is because transitioning images is currently
-        //written as to block all the pipeline
-        unsafe {self.device.begin_command_buffer(self.immediate_command_buffer, &cmd_begin_info).unwrap()};
-
         //draw ImGUI directly into swapchain image
-        self.immediate_submit(|cmd| {
-           self.draw_imgui(cmd, self.swapchain_image_views[swapchain_image_index as usize]);
-        });
-
-        unsafe {self.device.end_command_buffer(self.immediate_command_buffer).unwrap()};
+        self.draw_imgui(cmd, self.swapchain_image_views[swapchain_image_index as usize]);
 
         //transition swapchain image to a presentable layout
         vk_images::transition_image(
@@ -468,11 +459,11 @@ impl<'a> VulkanEngine<'a> {
         let color_attachment = vk_init::attachment_info(target_image_view, None, vk::ImageLayout::GENERAL);
         let render_info = vk_init::rendering_info(self.swapchain_extent, color_attachment, None);
 
-        unsafe {self.device.cmd_begin_rendering(self.immediate_command_buffer, &render_info)};
+        unsafe {self.device.cmd_begin_rendering(cmd, &render_info)};
 
-        self.renderer.get_mut().unwrap().cmd_draw(self.immediate_command_buffer, self.imgui_context.render()).unwrap();
+        self.renderer.get_mut().unwrap().cmd_draw(cmd, self.imgui_context.render()).unwrap();
 
-        unsafe {self.device.cmd_end_rendering(self.immediate_command_buffer)};
+        unsafe {self.device.cmd_end_rendering(cmd)};
 
     }
 }
