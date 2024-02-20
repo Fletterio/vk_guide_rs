@@ -8,6 +8,7 @@ mod vk_images;
 mod vk_init;
 mod vk_types;
 mod vk_pipelines;
+mod vk_compute;
 
 use vk_engine::VulkanEngine;
 

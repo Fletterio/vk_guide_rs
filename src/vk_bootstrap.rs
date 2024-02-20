@@ -3,7 +3,7 @@ mod device;
 #[cfg(debug_assertions)]
 use crate::vk_debug::vulkan_debug_callback;
 use crate::vk_engine::frame_data::{FrameData, FRAME_OVERLAP};
-use crate::vk_init;
+use crate::{vk_compute, vk_init};
 use crate::vk_types::AllocatedImage;
 #[cfg(debug_assertions)]
 use ash::extensions::ext::DebugUtils;
@@ -14,7 +14,10 @@ use gpu_allocator::MemoryLocation;
 use sdl2::video::Window;
 use std::cell::OnceCell;
 use std::ffi::{c_char, CString};
+use std::mem::size_of;
+use std::slice;
 use ash::vk::PipelineCache;
+use crate::vk_compute::ComputeEffect;
 use crate::vk_descriptors::{DescriptorAllocator, DescriptorSetLayoutBuilder, PoolSizeRatio};
 use crate::vk_pipelines;
 
@@ -389,33 +392,66 @@ pub fn init_descriptors(device: &Device, draw_image_view: vk::ImageView) -> (Des
     (global_descriptor_allocator, draw_image_descriptors, draw_image_descriptor_layout)
 }
 
-pub fn init_background_pipelines(device: &Device, descriptor_set_layout: vk::DescriptorSetLayout) -> (vk::Pipeline, vk::PipelineLayout) {
+pub fn init_background_pipelines(device: &Device, descriptor_set_layout: vk::DescriptorSetLayout) -> Vec<vk_compute::ComputeEffect>{
     let compute_pipeline_layout = vk::PipelineLayoutCreateInfo::builder()
-        .set_layouts(std::slice::from_ref(&descriptor_set_layout))
+        .set_layouts(slice::from_ref(&descriptor_set_layout))
+        .push_constant_ranges(slice::from_ref(&vk::PushConstantRange::builder()
+            .offset(0)
+            .size(size_of::<vk_compute::ComputePushConstants>() as u32)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+            .build()))
         .build();
     let gradient_pipeline_layout = unsafe {device.create_pipeline_layout(&compute_pipeline_layout, None).unwrap()};
 
-    let compute_draw_shader = vk_pipelines::load_shader_module("./shaders/gradient_comp.spv", device);
+    let gradient_shader = vk_pipelines::load_shader_module("./shaders/gradient_color_comp.spv", device);
+    let sky_shader = vk_pipelines::load_shader_module("./shaders/sky_comp.spv", device);
 
-    let name = CString::new("main").unwrap();
+    let shader_entry = CString::new("main").unwrap();
     let stage_info = vk::PipelineShaderStageCreateInfo::builder()
         .stage(vk::ShaderStageFlags::COMPUTE)
-        .module(compute_draw_shader)
-        .name(&name)
+        .module(gradient_shader)
+        .name(&shader_entry)
         .build();
 
-    let compute_pipeline_create_info = vk::ComputePipelineCreateInfo::builder()
+    let mut compute_pipeline_create_info = vk::ComputePipelineCreateInfo::builder()
         .layout(gradient_pipeline_layout)
         .stage(stage_info)
         .build();
 
-    let gradient_pipeline = unsafe {device.create_compute_pipelines(PipelineCache::null(), std::slice::from_ref(&compute_pipeline_create_info), None).unwrap()[0]};
+    let gradient_shader_pipeline = unsafe {device.create_compute_pipelines(PipelineCache::null(), std::slice::from_ref(&compute_pipeline_create_info), None).unwrap()[0]};
+    let gradient_shader_data = vk_compute::ComputePushConstants {
+        data1: cgmath::Vector4::<f32>::new(1f32, 0f32, 0f32, 1f32),
+        data2: cgmath::Vector4::<f32>::new(0f32, 0f32, 1f32, 1f32),
+        ..Default::default()
+    };
+    let gradient_effect = ComputeEffect {
+        name: String::from("gradient"),
+        pipeline: gradient_shader_pipeline,
+        layout: gradient_pipeline_layout,
+        data: gradient_shader_data.into()
+    };
+
+    compute_pipeline_create_info.stage.module = sky_shader;
+
+    let sky_shader_pipeline = unsafe {device.create_compute_pipelines(PipelineCache::null(), std::slice::from_ref(&compute_pipeline_create_info), None).unwrap()[0]};
+    let sky_data = vk_compute::ComputePushConstants {
+        data1: cgmath::Vector4::<f32>::new(0.1f32, 0.2f32, 0.4f32, 0.97f32),
+        ..Default::default()
+    };
+
+    let sky_effect = vk_compute::ComputeEffect {
+        name: String::from("sky"),
+        pipeline: sky_shader_pipeline,
+        layout: gradient_pipeline_layout,
+        data: sky_data.into(),
+    };
 
     //clean up shader module since it's not needed after pipeline creation
-    unsafe {device.destroy_shader_module(compute_draw_shader, None)};
+    unsafe {device.destroy_shader_module(gradient_shader, None)};
+    unsafe {device.destroy_shader_module(sky_shader, None)};
 
-    (gradient_pipeline, gradient_pipeline_layout)
+    [gradient_effect, sky_effect].into()
 }
-pub fn init_pipelines(device: &Device, descriptor_set_layout: vk::DescriptorSetLayout) -> (vk::Pipeline, vk::PipelineLayout) {
+pub fn init_pipelines(device: &Device, descriptor_set_layout: vk::DescriptorSetLayout) -> Vec<vk_compute::ComputeEffect> {
     init_background_pipelines(device, descriptor_set_layout)
 }

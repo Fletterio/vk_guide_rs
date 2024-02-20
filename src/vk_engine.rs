@@ -3,7 +3,7 @@ pub mod frame_data;
 mod immediate;
 
 use std::cell::OnceCell;
-use crate::vk_bootstrap;
+use crate::{vk_bootstrap, vk_compute};
 use crate::vk_types::AllocatedImage;
 use crate::{vk_images, vk_init};
 use anyhow::Result;
@@ -18,10 +18,12 @@ use sdl2::event::{Event, WindowEvent};
 use sdl2::sys::VkInstance;
 use sdl2::EventPump;
 use std::marker::PhantomData;
+use std::mem::size_of;
 use std::slice;
 use gpu_allocator::{AllocationSizes, AllocatorDebugSettings};
 use crate::vk_descriptors::DescriptorAllocator;
 use imgui_sdl2;
+use std::borrow::Borrow;
 
 const WINDOW_TITLE: &'static str = "Vulkan Engine";
 const WINDOW_WIDTH: u32 = 1700;
@@ -67,9 +69,6 @@ pub struct VulkanEngine<'a> {
     pub global_descriptor_allocator: DescriptorAllocator,
     pub draw_image_descriptors: vk::DescriptorSet,
     pub draw_image_descriptor_layout: vk::DescriptorSetLayout,
-    //Pipelines
-    pub gradient_pipeline: vk::Pipeline,
-    pub gradient_pipeline_layout: vk::PipelineLayout,
     //ImGUI stuff - Immediate
     pub immediate_fence: vk::Fence,
     pub immediate_command_pool: vk::CommandPool,
@@ -79,6 +78,9 @@ pub struct VulkanEngine<'a> {
     pub imgui_sdl2: imgui_sdl2::ImguiSdl2,
     pub imgui_pool: vk::DescriptorPool,
     pub renderer: OnceCell<imgui_rs_vulkan_renderer::Renderer>,
+    //compute pipeline effects
+    pub background_effects: Vec<vk_compute::ComputeEffect>,
+    pub current_background_effect: usize,
 }
 
 // Main loop functions
@@ -152,7 +154,7 @@ impl<'a> VulkanEngine<'a> {
             &mut allocator,
         );
         let (global_descriptor_allocator, draw_image_descriptors, draw_image_descriptor_layout) = vk_bootstrap::init_descriptors(&device, draw_image.image_view);
-        let (gradient_pipeline, gradient_pipeline_layout) = vk_bootstrap::init_pipelines(&device, draw_image_descriptor_layout);
+        let background_effects = vk_bootstrap::init_pipelines(&device, draw_image_descriptor_layout);
         //No need to add to deletion queue, drop method takes care of it
         let (imgui_context, imgui_sdl2, imgui_pool, renderer) = immediate::init_imgui(&instance, &device, physical_device, graphics_queue, immediate_command_pool, swapchain_image_format.format, &window);
         Ok(VulkanEngine {
@@ -188,15 +190,15 @@ impl<'a> VulkanEngine<'a> {
             global_descriptor_allocator,
             draw_image_descriptors,
             draw_image_descriptor_layout,
-            gradient_pipeline,
-            gradient_pipeline_layout,
             immediate_fence,
             immediate_command_pool,
             immediate_command_buffer,
             imgui_context,
             imgui_sdl2,
             imgui_pool,
-            renderer: renderer.into()
+            renderer: renderer.into(),
+            background_effects,
+            current_background_effect: 0,
         })
     }
     pub fn run(&mut self) {
@@ -230,10 +232,24 @@ impl<'a> VulkanEngine<'a> {
             self.imgui_sdl2.prepare_frame(self.imgui_context.io_mut(), &self.window, &self.event_pump.mouse_state());
             let ui = self.imgui_context.new_frame();
             //UI rendering code
-            ui.show_demo_window(&mut true);
+
+            //ui.show_demo_window(&mut true);
+            let effects = &self.background_effects;
+            let selected = effects[self.current_background_effect].borrow();
+            let shader_selection_window = ui.window("Shader selector");
+            let effects_len = effects.len();
+            shader_selection_window.build(|| {
+                ui.slider("Effect Index", 0, effects_len - 1, &mut self.current_background_effect);
+
+                let mut data = selected.data.borrow_mut();
+                ui.input_float4("data1", &mut data.data1).build();
+                ui.input_float4("data2", &mut data.data2).build();
+                ui.input_float4("data3", &mut data.data3).build();
+                ui.input_float4("data4", &mut data.data4).build();
+            });
+
             //call this immediately before rendering
             self.imgui_sdl2.prepare_render(&ui, &self.window);
-
             self.imgui_context.render();
             self.draw();
         }
@@ -419,7 +435,7 @@ impl<'a> Drop for VulkanEngine<'a> {
 
             self.destroy_immediate_handles();
 
-            self.destroy_pipelines();
+            self.destroy_effects();
 
             //destroy descriptor sets and their layouts
             self.destroy_descriptor_sets();
@@ -449,8 +465,16 @@ impl<'a> Drop for VulkanEngine<'a> {
 impl<'a> VulkanEngine<'a> {
     fn draw_background(&self, cmd: vk::CommandBuffer) {
         unsafe {
-            self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, self.gradient_pipeline);
-            self.device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::COMPUTE, self.gradient_pipeline_layout, 0, slice::from_ref(&self.draw_image_descriptors), &[]);
+            let effects = &self.background_effects;
+            let effect = effects[self.current_background_effect].borrow();
+
+            self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, effect.pipeline);
+            self.device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::COMPUTE, effect.layout, 0, slice::from_ref(&self.draw_image_descriptors), &[]);
+
+            let push_bytes = slice::from_raw_parts(
+                effect.data.as_ptr() as *const vk_compute::ComputePushConstants as *const u8,
+                size_of::<vk_compute::ComputePushConstants>());
+            self.device.cmd_push_constants(cmd, effect.layout, vk::ShaderStageFlags::COMPUTE, 0, push_bytes);
             self.device.cmd_dispatch(cmd, (self.draw_extent.width as f32 / 16f32).ceil() as u32, (self.draw_extent.height as f32 / 16f32).ceil() as u32, 1);
         }
     }

@@ -13,10 +13,13 @@ impl<'a> VulkanEngine<'a> {
         unsafe { self.draw_image.dealloc(&self.device, &mut self.allocator) };
     }
 
-    pub fn destroy_pipelines(&mut self){
+    pub fn destroy_effects(&mut self){
         unsafe {
-            self.device.destroy_pipeline_layout(self.gradient_pipeline_layout, None);
-            self.device.destroy_pipeline(self.gradient_pipeline, None);
+            self.device.destroy_pipeline_layout(self.background_effects[0].layout, None);
+
+            for effect in self.background_effects.iter() {
+                self.device.destroy_pipeline(effect.pipeline, None);
+            }
         }
     }
 
