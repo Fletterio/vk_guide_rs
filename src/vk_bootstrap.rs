@@ -20,6 +20,7 @@ use ash::vk::PipelineCache;
 use crate::vk_compute::ComputeEffect;
 use crate::vk_descriptors::{DescriptorAllocator, DescriptorSetLayoutBuilder, PoolSizeRatio};
 use crate::vk_pipelines;
+use crate::vk_pipelines::PipelineBuilder;
 
 //-----------------------------INSTANCE-------------------------------
 pub fn create_instance(entry: &Entry, window: &Window) -> Instance {
@@ -452,6 +453,50 @@ pub fn init_background_pipelines(device: &Device, descriptor_set_layout: vk::Des
 
     [gradient_effect, sky_effect].into()
 }
-pub fn init_pipelines(device: &Device, descriptor_set_layout: vk::DescriptorSetLayout) -> Vec<vk_compute::ComputeEffect> {
-    init_background_pipelines(device, descriptor_set_layout)
+
+pub fn init_triangle_pipeline(device: &Device, draw_image_format: &vk::Format) -> (vk::Pipeline, vk::PipelineLayout){
+    let triangle_frag_shader = vk_pipelines::load_shader_module("shaders/colored_triangle_frag.spv", device);
+    let triangle_vertex_shader = vk_pipelines::load_shader_module("shaders/colored_triangle_vert.spv", device);
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default();
+    let triangle_pipeline_layout = unsafe {device.create_pipeline_layout(&pipeline_layout_info, None).unwrap()};
+
+    let mut pipeline_builder = PipelineBuilder::default();
+
+    //use the triangle layout we created
+    pipeline_builder.pipeline_layout = triangle_pipeline_layout;
+    //connecting the vertex and pixel shaders to the pipeline
+    let shader_entry_name = CString::new("main").unwrap();
+    pipeline_builder.set_shaders(triangle_vertex_shader, triangle_frag_shader, &shader_entry_name, &shader_entry_name);
+    //it will draw triangles
+    pipeline_builder.set_input_topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+    //filled triangles
+    pipeline_builder.set_polygon_mode(vk::PolygonMode::FILL);
+    //no backface culling
+    pipeline_builder.set_cull_mode(vk::CullModeFlags::NONE, vk::FrontFace::CLOCKWISE);
+    //no multisampling
+    pipeline_builder.set_multisampling_none();
+    //no blending
+    pipeline_builder.disable_blending();
+    //no depth testing
+    pipeline_builder.disable_depth_test();
+
+    //connect the image format we will draw into, from draw image
+    pipeline_builder.set_color_attachment_format(draw_image_format);
+    pipeline_builder.set_depth_format(vk::Format::UNDEFINED);
+
+    //finally build the pipeline
+    let triangle_pipeline = pipeline_builder.build_pipeline(device);
+
+    //clean structures
+    unsafe {
+        device.destroy_shader_module(triangle_frag_shader, None);
+        device.destroy_shader_module(triangle_vertex_shader, None);
+    }
+    (triangle_pipeline, triangle_pipeline_layout)
+
 }
+
+pub fn init_pipelines(device: &Device, descriptor_set_layout: vk::DescriptorSetLayout, draw_image_format: &vk::Format) -> (Vec<vk_compute::ComputeEffect>, (vk::Pipeline, vk::PipelineLayout)) {
+    (init_background_pipelines(device, descriptor_set_layout), init_triangle_pipeline(device, draw_image_format))
+}
+

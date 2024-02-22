@@ -9,6 +9,7 @@ mod vk_init;
 mod vk_types;
 mod vk_pipelines;
 mod vk_compute;
+mod tests;
 
 use vk_engine::VulkanEngine;
 

@@ -23,6 +23,13 @@ impl<'a> VulkanEngine<'a> {
         }
     }
 
+    pub fn destroy_graphics(&mut self) {
+        unsafe {
+            self.device.destroy_pipeline_layout(self.triangle_pipeline_layout, None);
+            self.device.destroy_pipeline(self.triangle_pipeline, None);
+        }
+    }
+
     pub fn destroy_descriptor_sets(&mut self) {
         unsafe {self.device.destroy_descriptor_set_layout(self.draw_image_descriptor_layout, None)};
         unsafe {self.device.destroy_descriptor_pool(self.global_descriptor_allocator.pool, None)};

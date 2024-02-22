@@ -81,6 +81,9 @@ pub struct VulkanEngine<'a> {
     //compute pipeline effects
     pub background_effects: Vec<vk_compute::ComputeEffect>,
     pub current_background_effect: usize,
+    //graphics pipeline stuff
+    pub triangle_pipeline_layout: vk::PipelineLayout,
+    pub triangle_pipeline: vk::Pipeline,
 }
 
 // Main loop functions
@@ -154,7 +157,7 @@ impl<'a> VulkanEngine<'a> {
             &mut allocator,
         );
         let (global_descriptor_allocator, draw_image_descriptors, draw_image_descriptor_layout) = vk_bootstrap::init_descriptors(&device, draw_image.image_view);
-        let background_effects = vk_bootstrap::init_pipelines(&device, draw_image_descriptor_layout);
+        let (background_effects, (triangle_pipeline, triangle_pipeline_layout)) = vk_bootstrap::init_pipelines(&device, draw_image_descriptor_layout, &draw_image.image_format);
         //No need to add to deletion queue, drop method takes care of it
         let (imgui_context, imgui_sdl2, imgui_pool, renderer) = immediate::init_imgui(&instance, &device, physical_device, graphics_queue, immediate_command_pool, swapchain_image_format.format, &window);
         Ok(VulkanEngine {
@@ -199,6 +202,8 @@ impl<'a> VulkanEngine<'a> {
             renderer: renderer.into(),
             background_effects,
             current_background_effect: 0,
+            triangle_pipeline_layout,
+            triangle_pipeline
         })
     }
     pub fn run(&mut self) {
@@ -313,6 +318,7 @@ impl<'a> VulkanEngine<'a> {
 
         // transition our main draw image into general layout so we can write into it
         // we will overwrite it all so we dont care about what was the older layout
+        // GENERAL is required here by the background compute shader
         vk_images::transition_image(
             &self.device,
             cmd,
@@ -323,14 +329,23 @@ impl<'a> VulkanEngine<'a> {
 
         self.draw_background(cmd);
 
-        //transition the draw image and the swapchain image into their correct transfer layouts
-
-        //set the draw image to be the source of a copy command
+        //set the draw image to be drawable by graphics commands
         vk_images::transition_image(
             &self.device,
             cmd,
             self.draw_image.image,
             vk::ImageLayout::GENERAL,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        );
+
+        self.draw_geometry(&self.device, cmd);
+
+        //change draw image to be source of a copy command
+        vk_images::transition_image(
+            &self.device,
+            cmd,
+            self.draw_image.image,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
             vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
         );
 
@@ -436,6 +451,7 @@ impl<'a> Drop for VulkanEngine<'a> {
             self.destroy_immediate_handles();
 
             self.destroy_effects();
+            self.destroy_graphics();
 
             //destroy descriptor sets and their layouts
             self.destroy_descriptor_sets();
@@ -488,6 +504,39 @@ impl<'a> VulkanEngine<'a> {
         self.renderer.get_mut().unwrap().cmd_draw(cmd, self.imgui_context.render()).unwrap();
 
         unsafe {self.device.cmd_end_rendering(cmd)};
+    }
 
+    fn draw_geometry(&self, device: &Device, cmd: vk::CommandBuffer) {
+        // create necessary drawing info
+        let color_attachment = vk_init::attachment_info(self.draw_image.image_view, None, vk::ImageLayout::GENERAL);
+        let render_info = vk_init::rendering_info(self.draw_extent, color_attachment, None);
+        //begin "renderpass"
+        unsafe {device.cmd_begin_rendering(cmd, &render_info)};
+
+        unsafe {device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.triangle_pipeline)};
+
+        //set dynamic viewport and scissor
+        let viewport = vk::Viewport::builder()
+            .x(0f32)
+            .y(0f32)
+            .width(self.draw_extent.width as f32)
+            .height(self.draw_extent.height as f32)
+            .min_depth(0f32)
+            .max_depth(1f32)
+            .build();
+
+        unsafe {device.cmd_set_viewport(cmd, 0, slice::from_ref(&viewport))};
+
+        let scissor = vk::Rect2D::builder()
+            .offset(Default::default())
+            .extent(self.draw_extent)
+            .build();
+
+        unsafe {device.cmd_set_scissor(cmd, 0, slice::from_ref(&scissor))};
+
+        //launch a draw command to draw 3 vertices
+        unsafe {device.cmd_draw(cmd, 3, 1, 0, 0)};
+
+        unsafe {device.cmd_end_rendering(cmd)};
     }
 }
