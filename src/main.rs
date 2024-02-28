@@ -1,15 +1,15 @@
 extern crate core;
 
+mod tests;
 mod vk_bootstrap;
+mod vk_compute;
 mod vk_debug;
 mod vk_descriptors;
 mod vk_engine;
 mod vk_images;
 mod vk_init;
-mod vk_types;
 mod vk_pipelines;
-mod vk_compute;
-mod tests;
+mod vk_types;
 
 use vk_engine::VulkanEngine;
 

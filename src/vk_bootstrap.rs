@@ -1,13 +1,18 @@
 mod device;
 
+use crate::vk_compute::ComputeEffect;
 #[cfg(debug_assertions)]
 use crate::vk_debug::vulkan_debug_callback;
+use crate::vk_descriptors::{DescriptorAllocator, DescriptorSetLayoutBuilder, PoolSizeRatio};
 use crate::vk_engine::frame_data::{FrameData, FRAME_OVERLAP};
-use crate::{vk_compute, vk_init};
+use crate::vk_pipelines;
+use crate::vk_pipelines::PipelineBuilder;
 use crate::vk_types::AllocatedImage;
+use crate::{vk_compute, vk_init};
 #[cfg(debug_assertions)]
 use ash::extensions::ext::DebugUtils;
 use ash::extensions::khr::{Surface, Swapchain};
+use ash::vk::PipelineCache;
 use ash::{vk, Device, Entry, Instance};
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme};
 use gpu_allocator::MemoryLocation;
@@ -16,11 +21,9 @@ use std::cell::OnceCell;
 use std::ffi::{c_char, CString};
 use std::mem::size_of;
 use std::slice;
-use ash::vk::PipelineCache;
-use crate::vk_compute::ComputeEffect;
-use crate::vk_descriptors::{DescriptorAllocator, DescriptorSetLayoutBuilder, PoolSizeRatio};
-use crate::vk_pipelines;
-use crate::vk_pipelines::PipelineBuilder;
+use crate::vk_types::gpu_draw_push_constants::GPUDrawPushConstants;
+use crate::vk_types::gpu_mesh_buffers::{GPUMeshBuffers, upload_mesh};
+use crate::vk_types::vertex::Vertex;
 
 //-----------------------------INSTANCE-------------------------------
 pub fn create_instance(entry: &Entry, window: &Window) -> Instance {
@@ -284,8 +287,17 @@ pub fn create_swapchain(
     )
 }
 
-pub fn init_frames(device: &Device, graphics_queue_family: u32) -> ([FrameData; FRAME_OVERLAP], vk::CommandPool, vk::CommandBuffer, vk::Fence) {
-    let (command_stuff, immediate_pool, immediate_buffer) = init_commands(device, graphics_queue_family);
+pub fn init_frames(
+    device: &Device,
+    graphics_queue_family: u32,
+) -> (
+    [FrameData; FRAME_OVERLAP],
+    vk::CommandPool,
+    vk::CommandBuffer,
+    vk::Fence,
+) {
+    let (command_stuff, immediate_pool, immediate_buffer) =
+        init_commands(device, graphics_queue_family);
     let (sync_structures, immediate_fence) = init_sync_structures(device);
     let frames = <[FrameData; FRAME_OVERLAP]>::try_from(
         (0..FRAME_OVERLAP)
@@ -300,13 +312,23 @@ pub fn init_frames(device: &Device, graphics_queue_family: u32) -> ([FrameData; 
             })
             .collect::<Vec<FrameData>>(),
     );
-    (frames.expect("Error - weird error going from vec to array"), immediate_pool, immediate_buffer, immediate_fence)
+    (
+        frames.expect("Error - weird error going from vec to array"),
+        immediate_pool,
+        immediate_buffer,
+        immediate_fence,
+    )
 }
 
 fn init_commands(
     device: &Device,
     graphics_queue_family: u32,
-) -> ([(vk::CommandPool, vk::CommandBuffer); FRAME_OVERLAP], vk::CommandPool, vk::CommandBuffer) { //array is for each frame, last two are immediate
+) -> (
+    [(vk::CommandPool, vk::CommandBuffer); FRAME_OVERLAP],
+    vk::CommandPool,
+    vk::CommandBuffer,
+) {
+    //array is for each frame, last two are immediate
     let command_pool_info = vk_init::command_pool_create_info(
         graphics_queue_family,
         vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
@@ -328,15 +350,27 @@ fn init_commands(
         .unwrap();
 
     //immediate ones
-    let immediate_command_pool = unsafe {device.create_command_pool(&command_pool_info, None).unwrap()};
+    let immediate_command_pool = unsafe {
+        device
+            .create_command_pool(&command_pool_info, None)
+            .unwrap()
+    };
     let immediate_cmd_alloc_info = vk_init::command_buffer_allocate_info(immediate_command_pool, 1);
-    let immediate_command_buffer = unsafe {device.allocate_command_buffers(&immediate_cmd_alloc_info).unwrap()[0]};
+    let immediate_command_buffer = unsafe {
+        device
+            .allocate_command_buffers(&immediate_cmd_alloc_info)
+            .unwrap()[0]
+    };
     (commands, immediate_command_pool, immediate_command_buffer)
 }
 
 fn init_sync_structures(
     device: &Device,
-) -> ([(vk::Semaphore, vk::Semaphore, vk::Fence); FRAME_OVERLAP], vk::Fence) { //last fence is for immediate
+) -> (
+    [(vk::Semaphore, vk::Semaphore, vk::Fence); FRAME_OVERLAP],
+    vk::Fence,
+) {
+    //last fence is for immediate
     let fence_create_info = vk_init::fence_create_info(vk::FenceCreateFlags::SIGNALED);
     let semaphore_create_info = vk_init::semaphore_create_info(vk::SemaphoreCreateFlags::empty());
 
@@ -359,22 +393,35 @@ fn init_sync_structures(
         .try_into()
         .unwrap();
     //immediate fence
-    let immediate_fence = unsafe {device.create_fence(&fence_create_info, None).unwrap()};
+    let immediate_fence = unsafe { device.create_fence(&fence_create_info, None).unwrap() };
 
     (structures, immediate_fence)
 }
 
-pub fn init_descriptors(device: &Device, draw_image_view: vk::ImageView) -> (DescriptorAllocator, vk::DescriptorSet, vk::DescriptorSetLayout) {
-    let sizes = [PoolSizeRatio {descriptor_type: vk::DescriptorType::STORAGE_IMAGE, ratio: 1.0f32}];
+pub fn init_descriptors(
+    device: &Device,
+    draw_image_view: vk::ImageView,
+) -> (
+    DescriptorAllocator,
+    vk::DescriptorSet,
+    vk::DescriptorSetLayout,
+) {
+    let sizes = [PoolSizeRatio {
+        descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+        ratio: 1.0f32,
+    }];
 
     let mut global_descriptor_allocator = DescriptorAllocator::default();
     global_descriptor_allocator.init_pool(device, 10, &sizes);
 
-    let mut dsl_builder = DescriptorSetLayoutBuilder {bindings: Vec::new()};
+    let mut dsl_builder = DescriptorSetLayoutBuilder {
+        bindings: Vec::new(),
+    };
     dsl_builder.add_binding(0, vk::DescriptorType::STORAGE_IMAGE);
     let draw_image_descriptor_layout = dsl_builder.build(device, vk::ShaderStageFlags::COMPUTE);
 
-    let draw_image_descriptors = global_descriptor_allocator.allocate(device, draw_image_descriptor_layout);
+    let draw_image_descriptors =
+        global_descriptor_allocator.allocate(device, draw_image_descriptor_layout);
 
     let img_info = vk::DescriptorImageInfo::builder()
         .image_layout(vk::ImageLayout::GENERAL)
@@ -388,23 +435,37 @@ pub fn init_descriptors(device: &Device, draw_image_view: vk::ImageView) -> (Des
         .image_info(std::slice::from_ref(&img_info))
         .build();
 
-    unsafe {device.update_descriptor_sets(std::slice::from_ref(&draw_image_write), &[])};
+    unsafe { device.update_descriptor_sets(std::slice::from_ref(&draw_image_write), &[]) };
 
-    (global_descriptor_allocator, draw_image_descriptors, draw_image_descriptor_layout)
+    (
+        global_descriptor_allocator,
+        draw_image_descriptors,
+        draw_image_descriptor_layout,
+    )
 }
 
-pub fn init_background_pipelines(device: &Device, descriptor_set_layout: vk::DescriptorSetLayout) -> Vec<vk_compute::ComputeEffect>{
+pub fn init_background_pipelines(
+    device: &Device,
+    descriptor_set_layout: vk::DescriptorSetLayout,
+) -> Vec<vk_compute::ComputeEffect> {
     let compute_pipeline_layout = vk::PipelineLayoutCreateInfo::builder()
         .set_layouts(slice::from_ref(&descriptor_set_layout))
-        .push_constant_ranges(slice::from_ref(&vk::PushConstantRange::builder()
-            .offset(0)
-            .size(size_of::<vk_compute::ComputePushConstants>() as u32)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE)
-            .build()))
+        .push_constant_ranges(slice::from_ref(
+            &vk::PushConstantRange::builder()
+                .offset(0)
+                .size(size_of::<vk_compute::ComputePushConstants>() as u32)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                .build(),
+        ))
         .build();
-    let gradient_pipeline_layout = unsafe {device.create_pipeline_layout(&compute_pipeline_layout, None).unwrap()};
+    let gradient_pipeline_layout = unsafe {
+        device
+            .create_pipeline_layout(&compute_pipeline_layout, None)
+            .unwrap()
+    };
 
-    let gradient_shader = vk_pipelines::load_shader_module("./shaders/gradient_color_comp.spv", device);
+    let gradient_shader =
+        vk_pipelines::load_shader_module("./shaders/gradient_color_comp.spv", device);
     let sky_shader = vk_pipelines::load_shader_module("./shaders/sky_comp.spv", device);
 
     let shader_entry = CString::new("main").unwrap();
@@ -419,7 +480,15 @@ pub fn init_background_pipelines(device: &Device, descriptor_set_layout: vk::Des
         .stage(stage_info)
         .build();
 
-    let gradient_shader_pipeline = unsafe {device.create_compute_pipelines(PipelineCache::null(), std::slice::from_ref(&compute_pipeline_create_info), None).unwrap()[0]};
+    let gradient_shader_pipeline = unsafe {
+        device
+            .create_compute_pipelines(
+                PipelineCache::null(),
+                std::slice::from_ref(&compute_pipeline_create_info),
+                None,
+            )
+            .unwrap()[0]
+    };
     let gradient_shader_data = vk_compute::ComputePushConstants {
         data1: cgmath::Vector4::<f32>::new(1f32, 0f32, 0f32, 1f32),
         data2: cgmath::Vector4::<f32>::new(0f32, 0f32, 1f32, 1f32),
@@ -429,12 +498,20 @@ pub fn init_background_pipelines(device: &Device, descriptor_set_layout: vk::Des
         name: String::from("gradient"),
         pipeline: gradient_shader_pipeline,
         layout: gradient_pipeline_layout,
-        data: gradient_shader_data.into()
+        data: gradient_shader_data.into(),
     };
 
     compute_pipeline_create_info.stage.module = sky_shader;
 
-    let sky_shader_pipeline = unsafe {device.create_compute_pipelines(PipelineCache::null(), std::slice::from_ref(&compute_pipeline_create_info), None).unwrap()[0]};
+    let sky_shader_pipeline = unsafe {
+        device
+            .create_compute_pipelines(
+                PipelineCache::null(),
+                std::slice::from_ref(&compute_pipeline_create_info),
+                None,
+            )
+            .unwrap()[0]
+    };
     let sky_data = vk_compute::ComputePushConstants {
         data1: cgmath::Vector4::<f32>::new(0.1f32, 0.2f32, 0.4f32, 0.97f32),
         ..Default::default()
@@ -448,17 +525,26 @@ pub fn init_background_pipelines(device: &Device, descriptor_set_layout: vk::Des
     };
 
     //clean up shader module since it's not needed after pipeline creation
-    unsafe {device.destroy_shader_module(gradient_shader, None)};
-    unsafe {device.destroy_shader_module(sky_shader, None)};
+    unsafe { device.destroy_shader_module(gradient_shader, None) };
+    unsafe { device.destroy_shader_module(sky_shader, None) };
 
     [gradient_effect, sky_effect].into()
 }
 
-pub fn init_triangle_pipeline(device: &Device, draw_image_format: &vk::Format) -> (vk::Pipeline, vk::PipelineLayout){
-    let triangle_frag_shader = vk_pipelines::load_shader_module("shaders/colored_triangle_frag.spv", device);
-    let triangle_vertex_shader = vk_pipelines::load_shader_module("shaders/colored_triangle_vert.spv", device);
+pub fn init_triangle_pipeline(
+    device: &Device,
+    draw_image_format: &vk::Format,
+) -> (vk::Pipeline, vk::PipelineLayout) {
+    let triangle_frag_shader =
+        vk_pipelines::load_shader_module("shaders/colored_triangle_frag.spv", device);
+    let triangle_vertex_shader =
+        vk_pipelines::load_shader_module("shaders/colored_triangle_vert.spv", device);
     let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default();
-    let triangle_pipeline_layout = unsafe {device.create_pipeline_layout(&pipeline_layout_info, None).unwrap()};
+    let triangle_pipeline_layout = unsafe {
+        device
+            .create_pipeline_layout(&pipeline_layout_info, None)
+            .unwrap()
+    };
 
     let mut pipeline_builder = PipelineBuilder::default();
 
@@ -466,7 +552,12 @@ pub fn init_triangle_pipeline(device: &Device, draw_image_format: &vk::Format) -
     pipeline_builder.pipeline_layout = triangle_pipeline_layout;
     //connecting the vertex and pixel shaders to the pipeline
     let shader_entry_name = CString::new("main").unwrap();
-    pipeline_builder.set_shaders(triangle_vertex_shader, triangle_frag_shader, &shader_entry_name, &shader_entry_name);
+    pipeline_builder.set_shaders(
+        triangle_vertex_shader,
+        triangle_frag_shader,
+        &shader_entry_name,
+        &shader_entry_name,
+    );
     //it will draw triangles
     pipeline_builder.set_input_topology(vk::PrimitiveTopology::TRIANGLE_LIST);
     //filled triangles
@@ -493,10 +584,113 @@ pub fn init_triangle_pipeline(device: &Device, draw_image_format: &vk::Format) -
         device.destroy_shader_module(triangle_vertex_shader, None);
     }
     (triangle_pipeline, triangle_pipeline_layout)
-
 }
 
-pub fn init_pipelines(device: &Device, descriptor_set_layout: vk::DescriptorSetLayout, draw_image_format: &vk::Format) -> (Vec<vk_compute::ComputeEffect>, (vk::Pipeline, vk::PipelineLayout)) {
-    (init_background_pipelines(device, descriptor_set_layout), init_triangle_pipeline(device, draw_image_format))
+pub fn init_mesh_pipeline(
+    device: &Device,
+    draw_image_format: &vk::Format,
+) -> (vk::Pipeline, vk::PipelineLayout) {
+    let triangle_frag_shader =
+        vk_pipelines::load_shader_module("shaders/colored_triangle_frag.spv", device);
+    let triangle_vertex_shader =
+        vk_pipelines::load_shader_module("shaders/colored_triangle_mesh_vert.spv", device);
+
+    //push constants
+    let buffer_range = vk::PushConstantRange::builder()
+        .offset(0)
+        .size(size_of::<GPUDrawPushConstants>() as u32)
+        .stage_flags(vk::ShaderStageFlags::VERTEX)
+        .build();
+
+    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::builder()
+        .push_constant_ranges(slice::from_ref(&buffer_range))
+        .build();
+    let mesh_pipeline_layout = unsafe {
+        device
+            .create_pipeline_layout(&pipeline_layout_info, None)
+            .unwrap()
+    };
+
+    let mut pipeline_builder = PipelineBuilder::default();
+
+    //use the triangle layout we created
+    pipeline_builder.pipeline_layout = mesh_pipeline_layout;
+    //connecting the vertex and pixel shaders to the pipeline
+    let shader_entry_name = CString::new("main").unwrap();
+    pipeline_builder.set_shaders(
+        triangle_vertex_shader,
+        triangle_frag_shader,
+        &shader_entry_name,
+        &shader_entry_name,
+    );
+    //it will draw triangles
+    pipeline_builder.set_input_topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+    //filled triangles
+    pipeline_builder.set_polygon_mode(vk::PolygonMode::FILL);
+    //no backface culling
+    pipeline_builder.set_cull_mode(vk::CullModeFlags::NONE, vk::FrontFace::CLOCKWISE);
+    //no multisampling
+    pipeline_builder.set_multisampling_none();
+    //no blending
+    pipeline_builder.disable_blending();
+    //no depth testing
+    pipeline_builder.disable_depth_test();
+
+    //connect the image format we will draw into, from draw image
+    pipeline_builder.set_color_attachment_format(draw_image_format);
+    pipeline_builder.set_depth_format(vk::Format::UNDEFINED);
+
+    //finally build the pipeline
+    let mesh_pipeline = pipeline_builder.build_pipeline(device);
+
+    //clean structures
+    unsafe {
+        device.destroy_shader_module(triangle_frag_shader, None);
+        device.destroy_shader_module(triangle_vertex_shader, None);
+    }
+    (mesh_pipeline, mesh_pipeline_layout)
 }
 
+pub fn init_pipelines(
+    device: &Device,
+    descriptor_set_layout: vk::DescriptorSetLayout,
+    draw_image_format: &vk::Format,
+) -> (
+    Vec<vk_compute::ComputeEffect>,
+    (vk::Pipeline, vk::PipelineLayout),
+    (vk::Pipeline, vk::PipelineLayout)
+) {
+    (
+        init_background_pipelines(device, descriptor_set_layout),
+        init_triangle_pipeline(device, draw_image_format),
+        init_mesh_pipeline(device, draw_image_format)
+    )
+}
+
+pub fn init_default_data(device: &Device,
+                         allocator: &mut gpu_allocator::vulkan::Allocator,
+                         immediate_command_buffer: vk::CommandBuffer,
+                         immediate_fence: vk::Fence,
+                         immediate_queue: vk::Queue) -> GPUMeshBuffers {
+    let mut rect_vertices : [Vertex;4] = Default::default();
+    rect_vertices[0].position = (0.5,-0.5, 0f32).into();
+    rect_vertices[1].position = (0.5,0.5, 0f32).into();
+    rect_vertices[2].position = (-0.5,-0.5, 0f32).into();
+    rect_vertices[3].position = (-0.5,0.5, 0f32).into();
+
+    rect_vertices[0].color = (0f32,0f32, 0f32,1f32).into();
+    rect_vertices[1].color = (0.5,0.5,0.5 ,1f32).into();
+    rect_vertices[2].color = ( 1f32,0f32, 0f32,1f32 ).into();
+    rect_vertices[3].color = (0f32,1f32, 0f32,1f32 ).into();
+
+    let mut rect_indices : [u32; 6] = Default::default();
+    rect_indices[0] = 0;
+    rect_indices[1] = 1;
+    rect_indices[2] = 2;
+
+    rect_indices[3] = 2;
+    rect_indices[4] = 1;
+    rect_indices[5] = 3;
+
+    upload_mesh(device, allocator, &rect_indices, &rect_vertices, immediate_command_buffer, immediate_fence, immediate_queue)
+}

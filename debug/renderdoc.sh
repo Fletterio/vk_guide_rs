@@ -1,0 +1,1 @@
+~/Desktop/renderdoc_1.31/bin/renderdoccmd capture ./target/debug/vk_guide_rs

@@ -1,5 +1,5 @@
-use std::cell::RefCell;
 use ash::vk;
+use std::cell::RefCell;
 
 pub struct ComputePushConstants {
     pub data1: cgmath::Vector4<f32>,
@@ -23,5 +23,5 @@ pub struct ComputeEffect {
     pub name: String,
     pub pipeline: vk::Pipeline,
     pub layout: vk::PipelineLayout,
-    pub data: RefCell<ComputePushConstants>
+    pub data: RefCell<ComputePushConstants>,
 }

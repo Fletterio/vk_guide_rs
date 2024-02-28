@@ -68,21 +68,29 @@ impl DescriptorAllocator {
 
     #[allow(dead_code)]
     pub fn clear_descriptors(&mut self, device: &Device) {
-        unsafe {device.reset_descriptor_pool(self.pool, vk::DescriptorPoolResetFlags::empty()).unwrap()};
+        unsafe {
+            device
+                .reset_descriptor_pool(self.pool, vk::DescriptorPoolResetFlags::empty())
+                .unwrap()
+        };
     }
 
     #[allow(dead_code)]
-    pub fn destroy_pool(&mut self, device: &Device){
-        unsafe {device.destroy_descriptor_pool(self.pool, None)};
+    pub fn destroy_pool(&mut self, device: &Device) {
+        unsafe { device.destroy_descriptor_pool(self.pool, None) };
     }
 
     //allocates only one descriptor
-    pub fn allocate(&mut self, device: &Device, layout: vk::DescriptorSetLayout) -> vk::DescriptorSet {
+    pub fn allocate(
+        &mut self,
+        device: &Device,
+        layout: vk::DescriptorSetLayout,
+    ) -> vk::DescriptorSet {
         let alloc_info = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(self.pool)
             .set_layouts(std::slice::from_ref(&layout))
             .build();
 
-        unsafe {device.allocate_descriptor_sets(&alloc_info).unwrap()[0]}
+        unsafe { device.allocate_descriptor_sets(&alloc_info).unwrap()[0] }
     }
 }

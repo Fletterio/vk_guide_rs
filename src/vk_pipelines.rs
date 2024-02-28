@@ -1,8 +1,8 @@
+use ash::{vk, Device};
 use core::slice;
 use std::ffi::CStr;
 use std::path::Path;
 use std::ptr::null;
-use ash::{Device, vk};
 
 pub fn load_shader_module(file_path: impl AsRef<Path>, device: &Device) -> vk::ShaderModule {
     let mut file = std::fs::File::open(file_path).unwrap();
@@ -12,8 +12,11 @@ pub fn load_shader_module(file_path: impl AsRef<Path>, device: &Device) -> vk::S
         .code(&byte_code_aligned)
         .build();
 
-    unsafe {device.create_shader_module(&shader_create_info, None).unwrap()}
-
+    unsafe {
+        device
+            .create_shader_module(&shader_create_info, None)
+            .unwrap()
+    }
 }
 
 #[derive(Default)]
@@ -26,9 +29,8 @@ pub struct PipelineBuilder {
     pub pipeline_layout: vk::PipelineLayout,
     pub depth_stencil: vk::PipelineDepthStencilStateCreateInfo,
     pub render_info: vk::PipelineRenderingCreateInfo,
-    pub color_attachment_format: vk::Format
+    pub color_attachment_format: vk::Format,
 }
-
 
 impl PipelineBuilder {
     pub fn build_pipeline(mut self, device: &Device) -> vk::Pipeline {
@@ -63,25 +65,41 @@ impl PipelineBuilder {
             .dynamic_states(&state)
             .build();
 
-        let pipeline_info = pipeline_info_builder
-            .dynamic_state(&dynamic_info)
-            .build();
+        let pipeline_info = pipeline_info_builder.dynamic_state(&dynamic_info).build();
 
-        unsafe {device.create_graphics_pipelines(vk::PipelineCache::null(), slice::from_ref(&pipeline_info), None).unwrap()[0]}
+        unsafe {
+            device
+                .create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    slice::from_ref(&pipeline_info),
+                    None,
+                )
+                .unwrap()[0]
+        }
     }
 
-    pub fn set_shaders(&mut self, vertex_shader: vk::ShaderModule, fragment_shader: vk::ShaderModule, vertex_entry: &CStr, fragment_entry: &CStr) {
+    pub fn set_shaders(
+        &mut self,
+        vertex_shader: vk::ShaderModule,
+        fragment_shader: vk::ShaderModule,
+        vertex_entry: &CStr,
+        fragment_entry: &CStr,
+    ) {
         self.shader_stages.clear();
-        self.shader_stages.push(vk::PipelineShaderStageCreateInfo::builder()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vertex_shader)
-            .name(vertex_entry)
-            .build());
-        self.shader_stages.push(vk::PipelineShaderStageCreateInfo::builder()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(fragment_shader)
-            .name(fragment_entry)
-            .build());
+        self.shader_stages.push(
+            vk::PipelineShaderStageCreateInfo::builder()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(vertex_shader)
+                .name(vertex_entry)
+                .build(),
+        );
+        self.shader_stages.push(
+            vk::PipelineShaderStageCreateInfo::builder()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(fragment_shader)
+                .name(fragment_entry)
+                .build(),
+        );
     }
 
     pub fn set_input_topology(&mut self, topology: vk::PrimitiveTopology) {

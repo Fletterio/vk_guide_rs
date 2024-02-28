@@ -2,9 +2,10 @@ mod destructors;
 pub mod frame_data;
 mod immediate;
 
-use std::cell::OnceCell;
-use crate::{vk_bootstrap, vk_compute};
+use crate::vk_descriptors::DescriptorAllocator;
+use crate::vk_types::gpu_mesh_buffers::GPUMeshBuffers;
 use crate::vk_types::AllocatedImage;
+use crate::{vk_bootstrap, vk_compute};
 use crate::{vk_images, vk_init};
 use anyhow::Result;
 #[cfg(debug_assertions)]
@@ -14,16 +15,19 @@ use ash::vk::Handle;
 use ash::{vk, Entry};
 pub use ash::{Device, Instance};
 use frame_data::{FrameData, FRAME_OVERLAP};
+use gpu_allocator::{AllocationSizes, AllocatorDebugSettings};
+use imgui_sdl2;
 use sdl2::event::{Event, WindowEvent};
 use sdl2::sys::VkInstance;
 use sdl2::EventPump;
+use std::borrow::Borrow;
+use std::cell::OnceCell;
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::slice;
-use gpu_allocator::{AllocationSizes, AllocatorDebugSettings};
-use crate::vk_descriptors::DescriptorAllocator;
-use imgui_sdl2;
-use std::borrow::Borrow;
+use cgmath::SquareMatrix;
+use crate::vk_bootstrap::init_default_data;
+use crate::vk_types::gpu_draw_push_constants::GPUDrawPushConstants;
 
 const WINDOW_TITLE: &'static str = "Vulkan Engine";
 const WINDOW_WIDTH: u32 = 1700;
@@ -72,7 +76,7 @@ pub struct VulkanEngine<'a> {
     //ImGUI stuff - Immediate
     pub immediate_fence: vk::Fence,
     pub immediate_command_pool: vk::CommandPool,
-    pub immediate_command_buffer : vk::CommandBuffer,
+    pub immediate_command_buffer: vk::CommandBuffer,
     //ImGUI specific structs
     pub imgui_context: imgui::Context,
     pub imgui_sdl2: imgui_sdl2::ImguiSdl2,
@@ -84,6 +88,10 @@ pub struct VulkanEngine<'a> {
     //graphics pipeline stuff
     pub triangle_pipeline_layout: vk::PipelineLayout,
     pub triangle_pipeline: vk::Pipeline,
+    //mesh pipeline
+    pub mesh_pipeline_layout: vk::PipelineLayout,
+    pub mesh_pipeline: vk::Pipeline,
+    pub rectangle: GPUMeshBuffers,
 }
 
 // Main loop functions
@@ -126,7 +134,8 @@ impl<'a> VulkanEngine<'a> {
         //Event pump
         let event_pump = sdl_context.event_pump().unwrap();
         //FrameData creation
-        let (frames, immediate_command_pool, immediate_command_buffer, immediate_fence) = vk_bootstrap::init_frames(&device, graphics_queue_family);
+        let (frames, immediate_command_pool, immediate_command_buffer, immediate_fence) =
+            vk_bootstrap::init_frames(&device, graphics_queue_family);
 
         //Allocator creation
         let allocator_create_info = gpu_allocator::vulkan::AllocatorCreateDesc {
@@ -156,10 +165,27 @@ impl<'a> VulkanEngine<'a> {
             window_extent,
             &mut allocator,
         );
-        let (global_descriptor_allocator, draw_image_descriptors, draw_image_descriptor_layout) = vk_bootstrap::init_descriptors(&device, draw_image.image_view);
-        let (background_effects, (triangle_pipeline, triangle_pipeline_layout)) = vk_bootstrap::init_pipelines(&device, draw_image_descriptor_layout, &draw_image.image_format);
+        let (global_descriptor_allocator, draw_image_descriptors, draw_image_descriptor_layout) =
+            vk_bootstrap::init_descriptors(&device, draw_image.image_view);
+        let (background_effects,
+            (triangle_pipeline, triangle_pipeline_layout),
+            (mesh_pipeline, mesh_pipeline_layout)) =
+            vk_bootstrap::init_pipelines(
+                &device,
+                draw_image_descriptor_layout,
+                &draw_image.image_format,
+            );
         //No need to add to deletion queue, drop method takes care of it
-        let (imgui_context, imgui_sdl2, imgui_pool, renderer) = immediate::init_imgui(&instance, &device, physical_device, graphics_queue, immediate_command_pool, swapchain_image_format.format, &window);
+        let (imgui_context, imgui_sdl2, imgui_pool, renderer) = immediate::init_imgui(
+            &instance,
+            &device,
+            physical_device,
+            graphics_queue,
+            immediate_command_pool,
+            swapchain_image_format.format,
+            &window,
+        );
+        let rectangle = init_default_data(&device, &mut allocator, immediate_command_buffer, immediate_fence, graphics_queue);
         Ok(VulkanEngine {
             phantom: PhantomData,
             is_initialized: true,
@@ -203,7 +229,10 @@ impl<'a> VulkanEngine<'a> {
             background_effects,
             current_background_effect: 0,
             triangle_pipeline_layout,
-            triangle_pipeline
+            triangle_pipeline,
+            mesh_pipeline_layout,
+            mesh_pipeline,
+            rectangle,
         })
     }
     pub fn run(&mut self) {
@@ -212,8 +241,11 @@ impl<'a> VulkanEngine<'a> {
         while !b_quit {
             // Handle events on queue
             for event in self.event_pump.poll_iter() {
-                self.imgui_sdl2.handle_event(&mut self.imgui_context, &event);
-                if self.imgui_sdl2.ignore_event(&event) { continue; }
+                self.imgui_sdl2
+                    .handle_event(&mut self.imgui_context, &event);
+                if self.imgui_sdl2.ignore_event(&event) {
+                    continue;
+                }
                 match event {
                     Event::Quit { .. } => {
                         b_quit = true;
@@ -234,7 +266,11 @@ impl<'a> VulkanEngine<'a> {
                 continue;
             }
             //must be called before imgui.frame()
-            self.imgui_sdl2.prepare_frame(self.imgui_context.io_mut(), &self.window, &self.event_pump.mouse_state());
+            self.imgui_sdl2.prepare_frame(
+                self.imgui_context.io_mut(),
+                &self.window,
+                &self.event_pump.mouse_state(),
+            );
             let ui = self.imgui_context.new_frame();
             //UI rendering code
 
@@ -244,7 +280,12 @@ impl<'a> VulkanEngine<'a> {
             let shader_selection_window = ui.window("Shader selector");
             let effects_len = effects.len();
             shader_selection_window.build(|| {
-                ui.slider("Effect Index", 0, effects_len - 1, &mut self.current_background_effect);
+                ui.slider(
+                    "Effect Index",
+                    0,
+                    effects_len - 1,
+                    &mut self.current_background_effect,
+                );
 
                 let mut data = selected.data.borrow_mut();
                 ui.input_float4("data1", &mut data.data1).build();
@@ -377,7 +418,10 @@ impl<'a> VulkanEngine<'a> {
             vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
         );
         //draw ImGUI directly into swapchain image
-        self.draw_imgui(cmd, self.swapchain_image_views[swapchain_image_index as usize]);
+        self.draw_imgui(
+            cmd,
+            self.swapchain_image_views[swapchain_image_index as usize],
+        );
 
         //transition swapchain image to a presentable layout
         vk_images::transition_image(
@@ -484,36 +528,64 @@ impl<'a> VulkanEngine<'a> {
             let effects = &self.background_effects;
             let effect = effects[self.current_background_effect].borrow();
 
-            self.device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, effect.pipeline);
-            self.device.cmd_bind_descriptor_sets(cmd, vk::PipelineBindPoint::COMPUTE, effect.layout, 0, slice::from_ref(&self.draw_image_descriptors), &[]);
+            self.device
+                .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, effect.pipeline);
+            self.device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                effect.layout,
+                0,
+                slice::from_ref(&self.draw_image_descriptors),
+                &[],
+            );
 
             let push_bytes = slice::from_raw_parts(
                 effect.data.as_ptr() as *const vk_compute::ComputePushConstants as *const u8,
-                size_of::<vk_compute::ComputePushConstants>());
-            self.device.cmd_push_constants(cmd, effect.layout, vk::ShaderStageFlags::COMPUTE, 0, push_bytes);
-            self.device.cmd_dispatch(cmd, (self.draw_extent.width as f32 / 16f32).ceil() as u32, (self.draw_extent.height as f32 / 16f32).ceil() as u32, 1);
+                size_of::<vk_compute::ComputePushConstants>(),
+            );
+            self.device.cmd_push_constants(
+                cmd,
+                effect.layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                push_bytes,
+            );
+            self.device.cmd_dispatch(
+                cmd,
+                (self.draw_extent.width as f32 / 16f32).ceil() as u32,
+                (self.draw_extent.height as f32 / 16f32).ceil() as u32,
+                1,
+            );
         }
     }
 
     fn draw_imgui(&mut self, cmd: vk::CommandBuffer, target_image_view: vk::ImageView) {
-        let color_attachment = vk_init::attachment_info(target_image_view, None, vk::ImageLayout::GENERAL);
+        let color_attachment =
+            vk_init::attachment_info(target_image_view, None, vk::ImageLayout::GENERAL);
         let render_info = vk_init::rendering_info(self.swapchain_extent, color_attachment, None);
 
-        unsafe {self.device.cmd_begin_rendering(cmd, &render_info)};
+        unsafe { self.device.cmd_begin_rendering(cmd, &render_info) };
 
-        self.renderer.get_mut().unwrap().cmd_draw(cmd, self.imgui_context.render()).unwrap();
+        self.renderer
+            .get_mut()
+            .unwrap()
+            .cmd_draw(cmd, self.imgui_context.render())
+            .unwrap();
 
-        unsafe {self.device.cmd_end_rendering(cmd)};
+        unsafe { self.device.cmd_end_rendering(cmd) };
     }
 
     fn draw_geometry(&self, device: &Device, cmd: vk::CommandBuffer) {
         // create necessary drawing info
-        let color_attachment = vk_init::attachment_info(self.draw_image.image_view, None, vk::ImageLayout::GENERAL);
+        let color_attachment =
+            vk_init::attachment_info(self.draw_image.image_view, None, vk::ImageLayout::GENERAL);
         let render_info = vk_init::rendering_info(self.draw_extent, color_attachment, None);
         //begin "renderpass"
-        unsafe {device.cmd_begin_rendering(cmd, &render_info)};
+        unsafe { device.cmd_begin_rendering(cmd, &render_info) };
 
-        unsafe {device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.triangle_pipeline)};
+        unsafe {
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.triangle_pipeline)
+        };
 
         //set dynamic viewport and scissor
         let viewport = vk::Viewport::builder()
@@ -525,18 +597,36 @@ impl<'a> VulkanEngine<'a> {
             .max_depth(1f32)
             .build();
 
-        unsafe {device.cmd_set_viewport(cmd, 0, slice::from_ref(&viewport))};
+        unsafe { device.cmd_set_viewport(cmd, 0, slice::from_ref(&viewport)) };
 
         let scissor = vk::Rect2D::builder()
             .offset(Default::default())
             .extent(self.draw_extent)
             .build();
 
-        unsafe {device.cmd_set_scissor(cmd, 0, slice::from_ref(&scissor))};
+        unsafe { device.cmd_set_scissor(cmd, 0, slice::from_ref(&scissor)) };
 
         //launch a draw command to draw 3 vertices
-        unsafe {device.cmd_draw(cmd, 3, 1, 0, 0)};
+        unsafe { device.cmd_draw(cmd, 3, 1, 0, 0) };
 
-        unsafe {device.cmd_end_rendering(cmd)};
+        //next up draw the mesh
+        unsafe {device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.mesh_pipeline)};
+
+        let push_constants = GPUDrawPushConstants {
+            world_matrix: cgmath::Matrix4::identity(),
+            vertex_buffer: self.rectangle.vertex_buffer_address
+        };
+
+        let push_bytes = unsafe {slice::from_raw_parts(
+            &push_constants as *const GPUDrawPushConstants as *const u8,
+            size_of::<GPUDrawPushConstants>(),
+        )};
+
+        unsafe {device.cmd_push_constants(cmd, self.mesh_pipeline_layout, vk::ShaderStageFlags::VERTEX, 0, push_bytes)};
+        unsafe {device.cmd_bind_index_buffer(cmd, self.rectangle.index_buffer.buffer, 0, vk::IndexType::UINT32)};
+
+        unsafe {device.cmd_draw_indexed(cmd, 6, 1, 0, 0, 0)};
+
+        unsafe { device.cmd_end_rendering(cmd) };
     }
 }

@@ -1,6 +1,6 @@
 use ash::vk;
-use std::slice;
 use ash::vk::ClearValue;
+use std::slice;
 
 pub fn command_pool_create_info(
     queue_family_index: u32,
@@ -122,22 +122,33 @@ pub fn image_view_create_info(
         .build()
 }
 
-pub fn attachment_info(view: vk::ImageView, clear_value: Option<vk::ClearValue>, layout: vk::ImageLayout) -> vk::RenderingAttachmentInfo {
+pub fn attachment_info(
+    view: vk::ImageView,
+    clear_value: Option<vk::ClearValue>,
+    layout: vk::ImageLayout,
+) -> vk::RenderingAttachmentInfo {
     vk::RenderingAttachmentInfo::builder()
         .image_view(view)
         .image_layout(layout)
         .load_op(match clear_value {
             Some(_) => vk::AttachmentLoadOp::CLEAR,
-            None => vk::AttachmentLoadOp::LOAD
+            None => vk::AttachmentLoadOp::LOAD,
         })
         .store_op(vk::AttachmentStoreOp::STORE)
-        .clear_value(clear_value.unwrap_or_else(|| { ClearValue::default() }))
+        .clear_value(clear_value.unwrap_or_else(|| ClearValue::default()))
         .build()
 }
 
-pub fn rendering_info(render_extent: vk::Extent2D, color_attachment: vk::RenderingAttachmentInfo, depth_attachment: Option<&vk::RenderingAttachmentInfo>) -> vk::RenderingInfo {
+pub fn rendering_info(
+    render_extent: vk::Extent2D,
+    color_attachment: vk::RenderingAttachmentInfo,
+    depth_attachment: Option<&vk::RenderingAttachmentInfo>,
+) -> vk::RenderingInfo {
     let mut rendering_info = vk::RenderingInfo::builder()
-        .render_area(vk::Rect2D {offset: vk::Offset2D::default(), extent: render_extent})
+        .render_area(vk::Rect2D {
+            offset: vk::Offset2D::default(),
+            extent: render_extent,
+        })
         .layer_count(1)
         .color_attachments(slice::from_ref(&color_attachment));
 
