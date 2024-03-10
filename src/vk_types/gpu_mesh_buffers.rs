@@ -112,3 +112,10 @@ pub fn upload_mesh(
         vertex_buffer_address,
     }
 }
+
+impl GPUMeshBuffers {
+    pub fn dealloc(&mut self, device: &Device, allocator: &mut gpu_allocator::vulkan::Allocator) {
+        destroy_buffer(device, allocator, &mut self.vertex_buffer);
+        destroy_buffer(device, allocator, &mut self.index_buffer);
+    }
+}

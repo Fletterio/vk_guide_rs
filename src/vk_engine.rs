@@ -3,7 +3,6 @@ pub mod frame_data;
 mod immediate;
 
 use crate::vk_descriptors::DescriptorAllocator;
-use crate::vk_types::gpu_mesh_buffers::GPUMeshBuffers;
 use crate::vk_types::AllocatedImage;
 use crate::{vk_bootstrap, vk_compute};
 use crate::{vk_images, vk_init};
@@ -20,13 +19,14 @@ use imgui_sdl2;
 use sdl2::event::{Event, WindowEvent};
 use sdl2::sys::VkInstance;
 use sdl2::EventPump;
-use std::borrow::Borrow;
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 use std::marker::PhantomData;
 use std::mem::size_of;
+use std::rc::Rc;
 use std::slice;
-use cgmath::SquareMatrix;
+use cgmath::Deg;
 use crate::vk_bootstrap::init_default_data;
+use crate::vk_loader::MeshAsset;
 use crate::vk_types::gpu_draw_push_constants::GPUDrawPushConstants;
 
 const WINDOW_TITLE: &'static str = "Vulkan Engine";
@@ -68,6 +68,7 @@ pub struct VulkanEngine<'a> {
     pub allocator: gpu_allocator::vulkan::Allocator,
     //draw resources
     pub draw_image: AllocatedImage,
+    pub depth_image: AllocatedImage,
     pub draw_extent: vk::Extent2D,
     //descriptor stuff
     pub global_descriptor_allocator: DescriptorAllocator,
@@ -85,13 +86,12 @@ pub struct VulkanEngine<'a> {
     //compute pipeline effects
     pub background_effects: Vec<vk_compute::ComputeEffect>,
     pub current_background_effect: usize,
-    //graphics pipeline stuff
-    pub triangle_pipeline_layout: vk::PipelineLayout,
-    pub triangle_pipeline: vk::Pipeline,
     //mesh pipeline
     pub mesh_pipeline_layout: vk::PipelineLayout,
     pub mesh_pipeline: vk::Pipeline,
-    pub rectangle: GPUMeshBuffers,
+    //testing meshes
+    pub test_meshes: Vec<Rc<RefCell<MeshAsset>>>,
+
 }
 
 // Main loop functions
@@ -156,6 +156,7 @@ impl<'a> VulkanEngine<'a> {
             swapchain_image_views,
             swapchain_extent,
             draw_image,
+            depth_image
         ) = vk_bootstrap::create_swapchain(
             &instance,
             &device,
@@ -168,12 +169,12 @@ impl<'a> VulkanEngine<'a> {
         let (global_descriptor_allocator, draw_image_descriptors, draw_image_descriptor_layout) =
             vk_bootstrap::init_descriptors(&device, draw_image.image_view);
         let (background_effects,
-            (triangle_pipeline, triangle_pipeline_layout),
             (mesh_pipeline, mesh_pipeline_layout)) =
             vk_bootstrap::init_pipelines(
                 &device,
                 draw_image_descriptor_layout,
                 &draw_image.image_format,
+                depth_image.image_format
             );
         //No need to add to deletion queue, drop method takes care of it
         let (imgui_context, imgui_sdl2, imgui_pool, renderer) = immediate::init_imgui(
@@ -185,7 +186,7 @@ impl<'a> VulkanEngine<'a> {
             swapchain_image_format.format,
             &window,
         );
-        let rectangle = init_default_data(&device, &mut allocator, immediate_command_buffer, immediate_fence, graphics_queue);
+        let test_meshes = init_default_data(&device, &mut allocator, immediate_command_buffer, immediate_fence, graphics_queue);
         Ok(VulkanEngine {
             phantom: PhantomData,
             is_initialized: true,
@@ -215,6 +216,7 @@ impl<'a> VulkanEngine<'a> {
             graphics_queue_family,
             allocator,
             draw_image,
+            depth_image,
             draw_extent: window_extent,
             global_descriptor_allocator,
             draw_image_descriptors,
@@ -228,11 +230,9 @@ impl<'a> VulkanEngine<'a> {
             renderer: renderer.into(),
             background_effects,
             current_background_effect: 0,
-            triangle_pipeline_layout,
-            triangle_pipeline,
             mesh_pipeline_layout,
             mesh_pipeline,
-            rectangle,
+            test_meshes: test_meshes.unwrap(),
         })
     }
     pub fn run(&mut self) {
@@ -276,7 +276,7 @@ impl<'a> VulkanEngine<'a> {
 
             //ui.show_demo_window(&mut true);
             let effects = &self.background_effects;
-            let selected = effects[self.current_background_effect].borrow();
+            let selected = &effects[self.current_background_effect];
             let shader_selection_window = ui.window("Shader selector");
             let effects_len = effects.len();
             shader_selection_window.build(|| {
@@ -377,6 +377,15 @@ impl<'a> VulkanEngine<'a> {
             self.draw_image.image,
             vk::ImageLayout::GENERAL,
             vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        );
+
+        //transition depth image for depth testing
+        vk_images::transition_image(
+            &self.device,
+            cmd,
+            self.depth_image.image,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL,
         );
 
         self.draw_geometry(&self.device, cmd);
@@ -489,7 +498,10 @@ impl<'a> Drop for VulkanEngine<'a> {
             }
             //---------------------------- deallocations go here ------------------------------------------
 
-            //Renderer must be destroyed early, because it needs access to the device
+            //GPUMeshBuffers in test_meshes need to be deallocated while device and allocator are up
+            for mesh in &self.test_meshes {
+                mesh.borrow_mut().mesh_buffers.dealloc(&self.device, &mut self.allocator);
+            }
             self.renderer.take();
 
             self.destroy_immediate_handles();
@@ -526,7 +538,7 @@ impl<'a> VulkanEngine<'a> {
     fn draw_background(&self, cmd: vk::CommandBuffer) {
         unsafe {
             let effects = &self.background_effects;
-            let effect = effects[self.current_background_effect].borrow();
+            let effect = &effects[self.current_background_effect];
 
             self.device
                 .cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, effect.pipeline);
@@ -579,13 +591,10 @@ impl<'a> VulkanEngine<'a> {
         // create necessary drawing info
         let color_attachment =
             vk_init::attachment_info(self.draw_image.image_view, None, vk::ImageLayout::GENERAL);
-        let render_info = vk_init::rendering_info(self.draw_extent, color_attachment, None);
+        let depth_attachment = vk_init::depth_attachment_info(self.depth_image.image_view, vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL);
+        let render_info = vk_init::rendering_info(self.draw_extent, color_attachment, Some(&depth_attachment));
         //begin "renderpass"
         unsafe { device.cmd_begin_rendering(cmd, &render_info) };
-
-        unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.triangle_pipeline)
-        };
 
         //set dynamic viewport and scissor
         let viewport = vk::Viewport::builder()
@@ -606,15 +615,30 @@ impl<'a> VulkanEngine<'a> {
 
         unsafe { device.cmd_set_scissor(cmd, 0, slice::from_ref(&scissor)) };
 
-        //launch a draw command to draw 3 vertices
-        unsafe { device.cmd_draw(cmd, 3, 1, 0, 0) };
-
-        //next up draw the mesh
+        //Set up pipeline to render meshes
         unsafe {device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.mesh_pipeline)};
 
+        //world matrix needs to be upside down for gltf meshes since Vulkan uses opposite Y to OpenGL
+        //set the monkey 5 units back (using left-handed coordinates it seems)
+        let view = cgmath::Matrix4::from_translation((0f32, 0f32, -5f32).into());
+        let mut projection = cgmath::perspective(Deg {0: 70f32}, (self.draw_extent.width as f32) / (self.draw_extent.height as f32), 10000f32, 0.1f32);
+
+        // https://matthewwellings.com/blog/the-new-vulkan-coordinate-system/
+        // https://github.com/LunarG/VulkanSamples/commit/0dd36179880238014512c0637b0ba9f41febe803
+        // invert y-axis to use a left-handed system like OpenGL and change NDC to [0,1] which is what Vulkan uses
+        let clip = cgmath::Matrix4::new(1f32, 0f32, 0f32,0f32 ,
+                                                    0f32, -1f32, 0f32 ,0f32,
+                                                    0f32, 0f32 ,0.5f32, 0f32,
+                                                    0f32, 0f32, 0.5f32, 1f32);
+
+        projection = clip * projection;
+
+        //draw a blender monkeyhead
+        let monkey_mesh = self.test_meshes[2].borrow();
+
         let push_constants = GPUDrawPushConstants {
-            world_matrix: cgmath::Matrix4::identity(),
-            vertex_buffer: self.rectangle.vertex_buffer_address
+            world_matrix: projection * view,
+            vertex_buffer: monkey_mesh.mesh_buffers.vertex_buffer_address
         };
 
         let push_bytes = unsafe {slice::from_raw_parts(
@@ -623,9 +647,9 @@ impl<'a> VulkanEngine<'a> {
         )};
 
         unsafe {device.cmd_push_constants(cmd, self.mesh_pipeline_layout, vk::ShaderStageFlags::VERTEX, 0, push_bytes)};
-        unsafe {device.cmd_bind_index_buffer(cmd, self.rectangle.index_buffer.buffer, 0, vk::IndexType::UINT32)};
+        unsafe {device.cmd_bind_index_buffer(cmd, monkey_mesh.mesh_buffers.index_buffer.buffer, 0, vk::IndexType::UINT32)};
 
-        unsafe {device.cmd_draw_indexed(cmd, 6, 1, 0, 0, 0)};
+        unsafe {device.cmd_draw_indexed(cmd, monkey_mesh.surfaces[0].count, 1, monkey_mesh.surfaces[0].start_index, 0, 0)};
 
         unsafe { device.cmd_end_rendering(cmd) };
     }

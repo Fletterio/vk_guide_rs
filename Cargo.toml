@@ -24,3 +24,7 @@ sdl2 = { version = "0.36.0", features = ["raw-window-handle"] }
 stb_image = "0.3.0"
 thiserror = "1.0.56"
 tobj = "4.0.1"
+
+[features]
+
+vertex_normals = []

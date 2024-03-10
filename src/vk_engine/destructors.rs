@@ -11,6 +11,8 @@ impl<'a> VulkanEngine<'a> {
         }
         //deallocate the memory for the draw image associated to the swapchain
         unsafe { self.draw_image.dealloc(&self.device, &mut self.allocator) };
+        //do the same for the depth image
+        unsafe { self.depth_image.dealloc(&self.device, &mut self.allocator) };
     }
 
     pub fn destroy_effects(&mut self) {
@@ -26,9 +28,6 @@ impl<'a> VulkanEngine<'a> {
 
     pub fn destroy_graphics(&mut self) {
         unsafe {
-            self.device
-                .destroy_pipeline_layout(self.triangle_pipeline_layout, None);
-            self.device.destroy_pipeline(self.triangle_pipeline, None);
             self.device
                 .destroy_pipeline_layout(self.mesh_pipeline_layout, None);
             self.device.destroy_pipeline(self.mesh_pipeline, None);

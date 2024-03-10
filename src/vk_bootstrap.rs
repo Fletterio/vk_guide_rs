@@ -17,13 +17,13 @@ use ash::{vk, Device, Entry, Instance};
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, AllocationScheme};
 use gpu_allocator::MemoryLocation;
 use sdl2::video::Window;
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 use std::ffi::{c_char, CString};
 use std::mem::size_of;
+use std::rc::Rc;
 use std::slice;
+use crate::vk_loader::{load_gltf_meshes, MeshAsset};
 use crate::vk_types::gpu_draw_push_constants::GPUDrawPushConstants;
-use crate::vk_types::gpu_mesh_buffers::{GPUMeshBuffers, upload_mesh};
-use crate::vk_types::vertex::Vertex;
 
 //-----------------------------INSTANCE-------------------------------
 pub fn create_instance(entry: &Entry, window: &Window) -> Instance {
@@ -141,6 +141,7 @@ pub fn create_swapchain(
     Vec<vk::ImageView>,
     vk::Extent2D,
     AllocatedImage,
+    AllocatedImage
 ) {
     let surface_format = vk::SurfaceFormatKHR {
         format: vk::Format::B8G8R8A8_UNORM,
@@ -224,7 +225,7 @@ pub fn create_swapchain(
     };
     //hardcoding the draw format to 32 bit float
     let draw_image_format = vk::Format::R16G16B16A16_SFLOAT;
-    let draw_image_usage_flags: vk::ImageUsageFlags = vk::ImageUsageFlags::TRANSFER_SRC
+    let draw_image_usage_flags = vk::ImageUsageFlags::TRANSFER_SRC
         | vk::ImageUsageFlags::TRANSFER_DST
         | vk::ImageUsageFlags::STORAGE
         | vk::ImageUsageFlags::COLOR_ATTACHMENT;
@@ -268,12 +269,67 @@ pub fn create_swapchain(
             .unwrap()
     };
 
-    let allocated_image = AllocatedImage {
+    let allocated_image_draw = AllocatedImage {
         image: draw_image,
         image_view: draw_image_view,
         allocation: draw_image_allocation,
         image_extent: draw_image_extent,
         image_format: draw_image_format,
+    };
+
+    //depth image stuff
+    let depth_image_extent = draw_image_extent;
+    let depth_image_format = vk::Format::D32_SFLOAT;
+    let depth_image_usage_flags = vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
+
+    let depth_image_create_info =
+        vk_init::image_create_info(depth_image_format, depth_image_usage_flags, depth_image_extent);
+
+    let depth_image = unsafe { device.create_image(&depth_image_create_info, None).unwrap() };
+    let mut depth_image_requirements = unsafe { device.get_image_memory_requirements(depth_image) };
+
+    //ensure memory is hosted on GPU VRAM. This is likely unnecessary
+    depth_image_requirements.memory_type_bits |= vk::MemoryPropertyFlags::DEVICE_LOCAL.as_raw();
+    let depth_image_allocation: OnceCell<Allocation> = OnceCell::new();
+    depth_image_allocation
+        .set(
+            allocator
+                .allocate(&AllocationCreateDesc {
+                    name: "depth_image_allocation",
+                    requirements: depth_image_requirements,
+                    location: MemoryLocation::GpuOnly,
+                    linear: false,
+                    allocation_scheme: AllocationScheme::DedicatedImage(depth_image),
+                })
+                .unwrap(),
+        )
+        .unwrap();
+    // Bind memory to the image
+    unsafe {
+        device
+            .bind_image_memory(
+                depth_image,
+                depth_image_allocation.get().unwrap().memory(),
+                depth_image_allocation.get().unwrap().offset(),
+            )
+            .unwrap()
+    };
+
+    //build a image-view for the depth image to use for rendering
+    let depth_image_view_create_info =
+        vk_init::image_view_create_info(depth_image_format, depth_image, vk::ImageAspectFlags::DEPTH);
+    let depth_image_view = unsafe {
+        device
+            .create_image_view(&depth_image_view_create_info, None)
+            .unwrap()
+    };
+
+    let allocated_image_depth = AllocatedImage {
+        image: depth_image,
+        image_view: depth_image_view,
+        allocation: depth_image_allocation,
+        image_extent: depth_image_extent,
+        image_format: depth_image_format,
     };
 
     (
@@ -283,7 +339,8 @@ pub fn create_swapchain(
         swapchain_images,
         swapchain_image_views,
         surface_extent,
-        allocated_image,
+        allocated_image_draw,
+        allocated_image_depth
     )
 }
 
@@ -531,64 +588,10 @@ pub fn init_background_pipelines(
     [gradient_effect, sky_effect].into()
 }
 
-pub fn init_triangle_pipeline(
-    device: &Device,
-    draw_image_format: &vk::Format,
-) -> (vk::Pipeline, vk::PipelineLayout) {
-    let triangle_frag_shader =
-        vk_pipelines::load_shader_module("shaders/colored_triangle_frag.spv", device);
-    let triangle_vertex_shader =
-        vk_pipelines::load_shader_module("shaders/colored_triangle_vert.spv", device);
-    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default();
-    let triangle_pipeline_layout = unsafe {
-        device
-            .create_pipeline_layout(&pipeline_layout_info, None)
-            .unwrap()
-    };
-
-    let mut pipeline_builder = PipelineBuilder::default();
-
-    //use the triangle layout we created
-    pipeline_builder.pipeline_layout = triangle_pipeline_layout;
-    //connecting the vertex and pixel shaders to the pipeline
-    let shader_entry_name = CString::new("main").unwrap();
-    pipeline_builder.set_shaders(
-        triangle_vertex_shader,
-        triangle_frag_shader,
-        &shader_entry_name,
-        &shader_entry_name,
-    );
-    //it will draw triangles
-    pipeline_builder.set_input_topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-    //filled triangles
-    pipeline_builder.set_polygon_mode(vk::PolygonMode::FILL);
-    //no backface culling
-    pipeline_builder.set_cull_mode(vk::CullModeFlags::NONE, vk::FrontFace::CLOCKWISE);
-    //no multisampling
-    pipeline_builder.set_multisampling_none();
-    //no blending
-    pipeline_builder.disable_blending();
-    //no depth testing
-    pipeline_builder.disable_depth_test();
-
-    //connect the image format we will draw into, from draw image
-    pipeline_builder.set_color_attachment_format(draw_image_format);
-    pipeline_builder.set_depth_format(vk::Format::UNDEFINED);
-
-    //finally build the pipeline
-    let triangle_pipeline = pipeline_builder.build_pipeline(device);
-
-    //clean structures
-    unsafe {
-        device.destroy_shader_module(triangle_frag_shader, None);
-        device.destroy_shader_module(triangle_vertex_shader, None);
-    }
-    (triangle_pipeline, triangle_pipeline_layout)
-}
-
 pub fn init_mesh_pipeline(
     device: &Device,
     draw_image_format: &vk::Format,
+    depth_image_format: vk::Format
 ) -> (vk::Pipeline, vk::PipelineLayout) {
     let triangle_frag_shader =
         vk_pipelines::load_shader_module("shaders/colored_triangle_frag.spv", device);
@@ -633,12 +636,13 @@ pub fn init_mesh_pipeline(
     pipeline_builder.set_multisampling_none();
     //no blending
     pipeline_builder.disable_blending();
-    //no depth testing
-    pipeline_builder.disable_depth_test();
+    //enable depth testing
+    //pipeline_builder.disable_depth_test();
+    pipeline_builder.enable_depth_test(true, vk::CompareOp::GREATER_OR_EQUAL);
 
     //connect the image format we will draw into, from draw image
     pipeline_builder.set_color_attachment_format(draw_image_format);
-    pipeline_builder.set_depth_format(vk::Format::UNDEFINED);
+    pipeline_builder.set_depth_format(depth_image_format);
 
     //finally build the pipeline
     let mesh_pipeline = pipeline_builder.build_pipeline(device);
@@ -655,15 +659,14 @@ pub fn init_pipelines(
     device: &Device,
     descriptor_set_layout: vk::DescriptorSetLayout,
     draw_image_format: &vk::Format,
+    depth_image_format: vk::Format
 ) -> (
     Vec<vk_compute::ComputeEffect>,
-    (vk::Pipeline, vk::PipelineLayout),
     (vk::Pipeline, vk::PipelineLayout)
 ) {
     (
         init_background_pipelines(device, descriptor_set_layout),
-        init_triangle_pipeline(device, draw_image_format),
-        init_mesh_pipeline(device, draw_image_format)
+        init_mesh_pipeline(device, draw_image_format, depth_image_format)
     )
 }
 
@@ -671,26 +674,6 @@ pub fn init_default_data(device: &Device,
                          allocator: &mut gpu_allocator::vulkan::Allocator,
                          immediate_command_buffer: vk::CommandBuffer,
                          immediate_fence: vk::Fence,
-                         immediate_queue: vk::Queue) -> GPUMeshBuffers {
-    let mut rect_vertices : [Vertex;4] = Default::default();
-    rect_vertices[0].position = (0.5,-0.5, 0f32).into();
-    rect_vertices[1].position = (0.5,0.5, 0f32).into();
-    rect_vertices[2].position = (-0.5,-0.5, 0f32).into();
-    rect_vertices[3].position = (-0.5,0.5, 0f32).into();
-
-    rect_vertices[0].color = (0f32,0f32, 0f32,1f32).into();
-    rect_vertices[1].color = (0.5,0.5,0.5 ,1f32).into();
-    rect_vertices[2].color = ( 1f32,0f32, 0f32,1f32 ).into();
-    rect_vertices[3].color = (0f32,1f32, 0f32,1f32 ).into();
-
-    let mut rect_indices : [u32; 6] = Default::default();
-    rect_indices[0] = 0;
-    rect_indices[1] = 1;
-    rect_indices[2] = 2;
-
-    rect_indices[3] = 2;
-    rect_indices[4] = 1;
-    rect_indices[5] = 3;
-
-    upload_mesh(device, allocator, &rect_indices, &rect_vertices, immediate_command_buffer, immediate_fence, immediate_queue)
+                         immediate_queue: vk::Queue) -> Option<Vec<Rc<RefCell<MeshAsset>>>> {
+    load_gltf_meshes(device, allocator, immediate_command_buffer, immediate_fence, immediate_queue, "./assets/basicmesh.glb")
 }

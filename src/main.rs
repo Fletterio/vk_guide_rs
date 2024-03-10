@@ -10,6 +10,7 @@ mod vk_images;
 mod vk_init;
 mod vk_pipelines;
 mod vk_types;
+mod vk_loader;
 
 use vk_engine::VulkanEngine;
 

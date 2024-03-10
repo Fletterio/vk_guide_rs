@@ -158,3 +158,13 @@ pub fn rendering_info(
 
     rendering_info.build()
 }
+
+pub fn depth_attachment_info(view: vk::ImageView, layout: vk::ImageLayout) -> vk::RenderingAttachmentInfo {
+    vk::RenderingAttachmentInfo::builder()
+        .image_view(view)
+        .image_layout(layout)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::STORE)
+        .clear_value(ClearValue {depth_stencil: Default::default()})
+        .build()
+}
