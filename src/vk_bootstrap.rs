@@ -505,19 +505,19 @@ pub fn init_background_pipelines(
     device: &Device,
     descriptor_set_layout: vk::DescriptorSetLayout,
 ) -> Vec<vk_compute::ComputeEffect> {
-    let compute_pipeline_layout = vk::PipelineLayoutCreateInfo::builder()
+    let push_constant_range = vk::PushConstantRange::builder()
+        .offset(0)
+        .size(size_of::<vk_compute::ComputePushConstants>() as u32)
+        .stage_flags(vk::ShaderStageFlags::COMPUTE);
+
+    let compute_pipeline_layout_info = vk::PipelineLayoutCreateInfo::builder()
         .set_layouts(slice::from_ref(&descriptor_set_layout))
         .push_constant_ranges(slice::from_ref(
-            &vk::PushConstantRange::builder()
-                .offset(0)
-                .size(size_of::<vk_compute::ComputePushConstants>() as u32)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                .build(),
-        ))
-        .build();
+            &push_constant_range
+        ));
     let gradient_pipeline_layout = unsafe {
         device
-            .create_pipeline_layout(&compute_pipeline_layout, None)
+            .create_pipeline_layout(&compute_pipeline_layout_info, None)
             .unwrap()
     };
 
@@ -634,8 +634,9 @@ pub fn init_mesh_pipeline(
     pipeline_builder.set_cull_mode(vk::CullModeFlags::NONE, vk::FrontFace::CLOCKWISE);
     //no multisampling
     pipeline_builder.set_multisampling_none();
-    //no blending
-    pipeline_builder.disable_blending();
+    //enable blending
+    //pipeline_builder.disable_blending();
+    pipeline_builder.enable_blending_additive();
     //enable depth testing
     //pipeline_builder.disable_depth_test();
     pipeline_builder.enable_depth_test(true, vk::CompareOp::GREATER_OR_EQUAL);

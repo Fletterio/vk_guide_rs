@@ -170,4 +170,26 @@ impl PipelineBuilder {
         self.depth_stencil.min_depth_bounds = 0f32;
         self.depth_stencil.max_depth_bounds = 1f32;
     }
+
+    pub fn enable_blending_additive(&mut self){
+        self.color_blend_attachment.color_write_mask = vk::ColorComponentFlags::RGBA;
+        self.color_blend_attachment.blend_enable = vk::TRUE;
+        self.color_blend_attachment.src_color_blend_factor = vk::BlendFactor::ONE;
+        self.color_blend_attachment.dst_color_blend_factor = vk::BlendFactor::DST_ALPHA;
+        self.color_blend_attachment.color_blend_op = vk::BlendOp::ADD;
+        self.color_blend_attachment.src_alpha_blend_factor = vk::BlendFactor::ONE;
+        self.color_blend_attachment.dst_alpha_blend_factor = vk::BlendFactor::ZERO;
+        self.color_blend_attachment.alpha_blend_op = vk::BlendOp::ADD;
+    }
+
+    pub fn enable_blending_alphablend(&mut self){
+        self.color_blend_attachment.color_write_mask = vk::ColorComponentFlags::RGBA;
+        self.color_blend_attachment.blend_enable = vk::TRUE;
+        self.color_blend_attachment.src_color_blend_factor = vk::BlendFactor::ONE_MINUS_DST_ALPHA;
+        self.color_blend_attachment.dst_color_blend_factor = vk::BlendFactor::DST_ALPHA;
+        self.color_blend_attachment.color_blend_op = vk::BlendOp::ADD;
+        self.color_blend_attachment.src_alpha_blend_factor = vk::BlendFactor::ONE;
+        self.color_blend_attachment.dst_alpha_blend_factor = vk::BlendFactor::ZERO;
+        self.color_blend_attachment.alpha_blend_op = vk::BlendOp::ADD;
+    }
 }
